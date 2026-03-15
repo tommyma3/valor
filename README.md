@@ -22,6 +22,7 @@ The implementation mirrors the IterResearch flow (policy step -> environment ste
 - `scripts/train_value.py`: train value head
 - `scripts/compute_advantages.py`: compute advantages + labels
 - `scripts/train_policy.py`: train policy with advantage conditioning
+- `scripts/generate_sft.py`: generate SFT data via Kimi API
 - `scripts/test_llm.py`: quick generation sanity check
 
 ## Setup (uv)
@@ -97,6 +98,27 @@ The policy is trained to output a structured action:
 
 The input prompt includes the question, memory, and previous tool query/result, and optionally the advantage indicator.
 System prompt text lives in `valor/system_prompts.py`.
+
+## Generate SFT data (Kimi)
+
+The SFT generator calls the Kimi API with an OpenAI-compatible Chat Completions request.
+Set your API key and discover available models first.
+
+```bash
+export MOONSHOT_API_KEY=...  # or set it in your server environment
+uv run python scripts/generate_sft.py --list-models
+```
+
+Then generate SFT trajectories:
+
+```bash
+uv run python scripts/generate_sft.py \
+  --input data/sft_states.jsonl \
+  --output data/sft.jsonl \
+  --model <YOUR_KIMI_MODEL_ID>
+```
+
+Input format for `sft_states.jsonl` is the same as the state-only records shown above.
 
 ## Pipeline
 

@@ -5,6 +5,7 @@ description = "Value-guided context management for agent learning"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "requests>=2.31.0",
     "torch==2.9.1",
     "transformers>=4.40.0",
     "tqdm",
