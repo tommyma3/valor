@@ -12,6 +12,7 @@ dependencies = [
     "huggingface-hub>=1.7.1",
     "accelerate>=1.13.0",
     "safetensors>=0.7.0",
+    "sglang>=0.5.2",
 ]
 
 [[tool.uv.index]]
