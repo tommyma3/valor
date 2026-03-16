@@ -7,7 +7,7 @@ import requests
 
 from valor.io_utils import read_jsonl, write_jsonl
 from valor.prompts import State, format_state_prompt, parse_action
-from valor.system_prompts import SYSTEM_PROMPT
+from valor.system_prompts import render_system_prompt
 
 
 DEFAULT_BASE_URL = "https://api.moonshot.ai/v1"
@@ -56,9 +56,10 @@ def list_models(base_url: str, api_key: str, timeout: int) -> None:
 
 
 def build_messages(state: State) -> List[Dict[str, str]]:
+    system_prompt = render_system_prompt(question=state.question)
     prompt = format_state_prompt(state, include_system_prompt=False)
     return [
-        {"role": "system", "content": SYSTEM_PROMPT.strip()},
+        {"role": "system", "content": system_prompt.strip()},
         {"role": "user", "content": prompt},
     ]
 

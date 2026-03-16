@@ -12,7 +12,8 @@ The implementation mirrors the IterResearch flow (policy step -> environment ste
 
 ## Repository layout
 
-- `valor/system_prompts.py`: system prompt text for the agent
+- `prompts/prompts.py`: IterResearch prompt templates (source of system prompt)
+- `valor/system_prompts.py`: loader for the system prompt used by VALOR
 - `valor/prompts.py`: prompt templates and action parsing
 - `valor/model.py`: shared transformer + policy head + value head
 - `valor/data.py`: datasets and collators
@@ -96,8 +97,7 @@ The policy is trained to output a structured action:
 </TOOL>
 ```
 
-The input prompt includes the question, memory, and previous tool query/result, and optionally the advantage indicator.
-System prompt text lives in `valor/system_prompts.py`.
+The system prompt is loaded from `prompts/prompts.py` via `valor/system_prompts.py`.
 
 ## Generate SFT data (Kimi)
 

@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from valor.system_prompts import SYSTEM_PROMPT
+from valor.system_prompts import render_system_prompt
 
 
 @dataclass
@@ -33,10 +33,17 @@ def format_state_prompt(
     include_advantage: bool = False,
     advantage_label: Optional[int] = None,
     include_system_prompt: bool = True,
+    tools: str = "",
+    date_to_use: Optional[str] = None,
 ) -> str:
     parts = []
     if include_system_prompt:
-        parts.extend([SYSTEM_PROMPT.strip(), ""])
+        system_prompt = render_system_prompt(
+            question=state.question,
+            tools=tools,
+            date_to_use=date_to_use,
+        )
+        parts.extend([system_prompt.strip(), ""])
 
     parts.extend(
         [
