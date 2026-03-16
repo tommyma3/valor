@@ -120,6 +120,21 @@ uv run python scripts/generate_sft.py \
 
 Input format for `sft_states.jsonl` is the same as the state-only records shown above.
 
+## Run with SGLang (no training)
+
+If you already have a SGLang server running, point `collect_trajectories.py` at it instead of loading the model locally.
+
+```bash
+uv run python scripts/collect_trajectories.py \
+  --states data/states.jsonl \
+  --output data/trajectories.jsonl \
+  --checkpoint Qwen/Qwen3.5-35B-A3B \
+  --sglang-url http://127.0.0.1:8000 \
+  --sglang-model Qwen/Qwen3.5-35B-A3B
+```
+
+Optionally set `SGLANG_API_KEY` if your server requires auth.
+
 ## Pipeline
 
 ### 1) (Optional) Pretrain with IterResearch-style SFT
