@@ -9,6 +9,9 @@ dependencies = [
     "torch==2.9.1",
     "transformers>=4.40.0",
     "tqdm",
+    "huggingface-hub>=1.7.1",
+    "accelerate>=1.13.0",
+    "safetensors>=0.7.0",
 ]
 
 [[tool.uv.index]]
