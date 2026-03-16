@@ -7,10 +7,14 @@ requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.13.0",
     "huggingface-hub>=1.7.1",
+    "pandas>=3.0.1",
+    "pyarrow>=23.0.1",
+    "ray>=2.54.0",
     "requests>=2.32.5",
     "safetensors>=0.7.0",
     "torch>=2.10.0",
     "transformers>=5.3.0",
     "typing>=3.10.0.0",
     "uuid>=1.30",
+    "vllm>=0.2.5",
 ]
