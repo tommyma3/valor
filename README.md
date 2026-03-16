@@ -24,6 +24,7 @@ The implementation mirrors the IterResearch flow (policy step -> environment ste
 - `scripts/compute_advantages.py`: compute advantages + labels
 - `scripts/train_policy.py`: train policy with advantage conditioning
 - `scripts/generate_sft.py`: generate SFT data via Kimi API
+- `scripts/run_iterresearch.py`: run the IterResearch prompt on a local model
 - `scripts/test_llm.py`: quick generation sanity check
 
 ## Setup (uv)
@@ -134,6 +135,16 @@ uv run python scripts/collect_trajectories.py \
 ```
 
 Optionally set `SGLANG_API_KEY` if your server requires auth.
+
+## Quick IterResearch sanity check (no training)
+
+Run the compact IterResearch prompt directly against the base model to see the raw behavior.
+
+```bash
+uv run python scripts/run_iterresearch.py \
+  --model-path model/Qwen3.5-35B-A3B \
+  --question "What are the key steps in this problem?"
+```
 
 ## Pipeline
 
