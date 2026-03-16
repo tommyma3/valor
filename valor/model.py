@@ -15,6 +15,35 @@ class ModelOutputs:
     value_logits: torch.Tensor
 
 
+def _resolve_hidden_size(config) -> int:
+    candidates = [
+        "hidden_size",
+        "n_embd",
+        "model_dim",
+        "d_model",
+        "hidden_sizes",
+    ]
+    for attr in candidates:
+        if hasattr(config, attr):
+            val = getattr(config, attr)
+            if isinstance(val, (list, tuple)) and val:
+                return int(val[-1])
+            if isinstance(val, int):
+                return int(val)
+
+    for nested_attr in ["text_config", "model_config", "llm_config"]:
+        if hasattr(config, nested_attr):
+            nested = getattr(config, nested_attr)
+            try:
+                return _resolve_hidden_size(nested)
+            except ValueError:
+                pass
+
+    raise ValueError(
+        "Could not infer hidden size from model config."
+    )
+
+
 class PolicyValueModel(nn.Module):
     def __init__(
         self,
@@ -32,7 +61,7 @@ class PolicyValueModel(nn.Module):
             device_map=device_map,
             trust_remote_code=trust_remote_code,
         )
-        hidden_size = config.hidden_size
+        hidden_size = _resolve_hidden_size(self.backbone.config)
         self.value_head = nn.Linear(hidden_size, 2)
 
     def forward(
