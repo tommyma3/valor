@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from valor.data import ValueDataset, collate_value
 from valor.io_utils import read_jsonl, write_jsonl
-from valor.model import PolicyValueModel
+from valor.model import ValueModel
 from valor.trajectory import compute_returns
 
 
@@ -51,7 +51,7 @@ def main() -> None:
     )
 
     torch_dtype = torch.bfloat16 if args.device == "cuda" else None
-    model = PolicyValueModel(
+    model = ValueModel(
         args.value_model,
         torch_dtype=torch_dtype,
         device_map=None,

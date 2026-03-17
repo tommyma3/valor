@@ -8,7 +8,7 @@ from transformers import AutoTokenizer
 from tqdm import tqdm
 
 from valor.io_utils import read_jsonl, write_jsonl
-from valor.model import PolicyValueModel
+from valor.model import PolicyModel
 from valor.prompts import State, format_state_prompt, parse_action
 
 
@@ -71,7 +71,7 @@ def main() -> None:
             tokenizer.pad_token = tokenizer.eos_token
 
         torch_dtype = torch.bfloat16 if args.device == "cuda" else None
-        model = PolicyValueModel(
+        model = PolicyModel(
             args.checkpoint,
             torch_dtype=torch_dtype,
             device_map=None,

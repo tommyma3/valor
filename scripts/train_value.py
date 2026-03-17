@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 from pathlib import Path
 
 import torch
@@ -8,16 +8,16 @@ from tqdm import tqdm
 
 from valor.data import ValueDataset, collate_value
 from valor.io_utils import read_jsonl
-from valor.model import PolicyValueModel
+from valor.model import ValueModel
 from valor.trajectory import compute_returns, ensure_value_labels
 from valor.utils import set_seed
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train the value head for VALOR.")
+    parser = argparse.ArgumentParser(description="Train the value model for VALOR.")
     parser.add_argument("--data", required=True, help="Path to transitions jsonl.")
     parser.add_argument("--output", required=True, help="Output directory for checkpoint.")
-    parser.add_argument("--backbone", default="Qwen/Qwen3.5-35B-A3B")
+    parser.add_argument("--backbone", default="Qwen/Qwen3.5-9B")
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=2e-5)
@@ -50,7 +50,7 @@ def main() -> None:
     )
 
     torch_dtype = torch.bfloat16 if args.device == "cuda" else None
-    model = PolicyValueModel(
+    model = ValueModel(
         args.backbone,
         torch_dtype=torch_dtype,
         device_map=args.device_map,
@@ -80,7 +80,6 @@ def main() -> None:
             outputs = model(
                 input_ids=batch["input_ids"],
                 attention_mask=batch["attention_mask"],
-                labels=None,
             )
             loss = torch.nn.functional.cross_entropy(
                 outputs.value_logits, batch["value_labels"]

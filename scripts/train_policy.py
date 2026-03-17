@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 from pathlib import Path
 
 import torch
@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from valor.data import PolicyDataset, collate_policy
 from valor.io_utils import read_jsonl
-from valor.model import PolicyValueModel
+from valor.model import PolicyModel
 from valor.utils import set_seed
 
 
@@ -25,7 +25,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-map", default=None)
     parser.add_argument("--alpha", type=float, default=1.0)
     parser.add_argument("--indicator-drop-prob", type=float, default=0.1)
-    parser.add_argument("--freeze-value-head", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
@@ -48,16 +47,12 @@ def main() -> None:
     )
 
     torch_dtype = torch.bfloat16 if args.device == "cuda" else None
-    model = PolicyValueModel(
+    model = PolicyModel(
         args.backbone,
         torch_dtype=torch_dtype,
         device_map=args.device_map,
         trust_remote_code=True,
     )
-
-    if args.freeze_value_head:
-        for param in model.value_head.parameters():
-            param.requires_grad = False
 
     if args.device_map is None:
         device = torch.device(args.device if torch.cuda.is_available() else "cpu")

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
@@ -9,9 +9,13 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 
 @dataclass
-class ModelOutputs:
+class PolicyOutputs:
     lm_loss: Optional[torch.Tensor]
     lm_logits: torch.Tensor
+
+
+@dataclass
+class ValueOutputs:
     value_logits: torch.Tensor
 
 
@@ -39,12 +43,48 @@ def _resolve_hidden_size(config) -> int:
             except ValueError:
                 pass
 
-    raise ValueError(
-        "Could not infer hidden size from model config."
-    )
+    raise ValueError("Could not infer hidden size from model config.")
 
 
-class PolicyValueModel(nn.Module):
+class PolicyModel(nn.Module):
+    def __init__(
+        self,
+        backbone_name: str,
+        torch_dtype: Optional[torch.dtype] = None,
+        device_map: Optional[str | dict] = None,
+        trust_remote_code: bool = True,
+    ) -> None:
+        super().__init__()
+        config = AutoConfig.from_pretrained(backbone_name, trust_remote_code=trust_remote_code)
+        self.backbone = AutoModelForCausalLM.from_pretrained(
+            backbone_name,
+            config=config,
+            torch_dtype=torch_dtype,
+            device_map=device_map,
+            trust_remote_code=trust_remote_code,
+        )
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
+    ) -> PolicyOutputs:
+        outputs = self.backbone(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+        )
+        return PolicyOutputs(
+            lm_loss=outputs.loss,
+            lm_logits=outputs.logits,
+        )
+
+    def save(self, output_dir: str) -> None:
+        self.backbone.save_pretrained(output_dir)
+
+
+class ValueModel(nn.Module):
     def __init__(
         self,
         backbone_name: str,
@@ -68,23 +108,17 @@ class PolicyValueModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        labels: Optional[torch.Tensor] = None,
-    ) -> ModelOutputs:
+    ) -> ValueOutputs:
         outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            labels=labels,
             output_hidden_states=True,
         )
         hidden = outputs.hidden_states[-1]
         last_index = attention_mask.sum(dim=1) - 1
         pooled = hidden[torch.arange(hidden.size(0), device=hidden.device), last_index]
         value_logits = self.value_head(pooled)
-        return ModelOutputs(
-            lm_loss=outputs.loss,
-            lm_logits=outputs.logits,
-            value_logits=value_logits,
-        )
+        return ValueOutputs(value_logits=value_logits)
 
     def save(self, output_dir: str) -> None:
         self.backbone.save_pretrained(output_dir)

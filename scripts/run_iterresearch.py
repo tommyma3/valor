@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from prompts import initial_instruction_prompt, instruction_prompt
-from valor.model import PolicyValueModel
+from valor.model import PolicyModel
 from valor.system_prompts import build_tools_prompt
 
 
@@ -131,7 +131,7 @@ def _build_tool_registry() -> tuple[Dict[str, Any], Dict[str, str]]:
 
 
 def _generate_completion(
-    model: PolicyValueModel,
+    model: PolicyModel,
     tokenizer: AutoTokenizer,
     prompt: str,
     device: torch.device,
@@ -186,7 +186,7 @@ def main() -> None:
 
     report("Loading model.")
     torch_dtype = torch.bfloat16 if args.device == "cuda" else None
-    model = PolicyValueModel(
+    model = PolicyModel(
         args.model_path,
         torch_dtype=torch_dtype,
         device_map=device_map,
