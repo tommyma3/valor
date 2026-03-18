@@ -33,6 +33,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Device map for multi-GPU inference (e.g., auto, balanced, balanced_low_0).",
     )
+    parser.add_argument("--dtype", default=None, choices=["bf16", "fp16", "fp32"], help="Model dtype.")
+    parser.add_argument(
+        "--max-memory",
+        default=None,
+        help="Per-GPU max memory (e.g., 20GiB) or JSON dict for max_memory.",
+    )
+    parser.add_argument("--offload-folder", default=None)
+    parser.add_argument("--offload-state-dict", action="store_true")
     parser.add_argument("--max-steps", type=int, default=6)
     return parser.parse_args()
 
@@ -57,6 +65,29 @@ def _safe_json_loads(text: str) -> Optional[dict]:
             except json.JSONDecodeError:
                 return None
         return None
+
+
+
+
+def _resolve_dtype(dtype: Optional[str], device: str) -> Optional[torch.dtype]:
+    if dtype is None:
+        return torch.bfloat16 if device == "cuda" else None
+    if dtype == "bf16":
+        return torch.bfloat16
+    if dtype == "fp16":
+        return torch.float16
+    if dtype == "fp32":
+        return torch.float32
+    raise ValueError(f"Unsupported dtype: {dtype}")
+
+
+def _parse_max_memory(value: Optional[str], gpu_count: int) -> Optional[dict]:
+    if not value:
+        return None
+    raw = value.strip()
+    if raw.startswith("{"):
+        return json.loads(raw)
+    return {idx: raw for idx in range(gpu_count)}
 
 
 def _normalize_tool_call(payload: dict) -> Tuple[str, Any]:
@@ -118,16 +149,12 @@ def _load_tool_classes():
     return tool_classes
 
 
-def _build_tool_registry() -> tuple[Dict[str, Any], Dict[str, str]]:
+def _build_tool_registry() -> Dict[str, Any]:
     registry: Dict[str, Any] = {}
-    init_errors: Dict[str, str] = {}
     for cls in _load_tool_classes():
         name = getattr(cls, "name", cls.__name__)
-        try:
-            registry[name] = cls()
-        except Exception as exc:
-            init_errors[name] = str(exc)
-    return registry, init_errors
+        registry[name] = cls
+    return registry
 
 
 def _generate_completion(
@@ -168,7 +195,9 @@ def main() -> None:
     tools_text = build_tools_prompt()
 
     report("Initializing tool registry.")
-    tool_registry, tool_init_errors = _build_tool_registry()
+    tool_registry = _build_tool_registry()
+    tool_instances: Dict[str, Any] = {}
+    tool_init_errors: Dict[str, str] = {}
 
     report("Loading tokenizer.")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
@@ -184,13 +213,28 @@ def main() -> None:
         device_map = None
     report(f"Resolved device map: {device_map or 'none'} (GPU count: {gpu_count}).")
 
+    report("Resolving dtype and memory limits.")
+    torch_dtype = _resolve_dtype(args.dtype, args.device)
+    try:
+        max_memory = _parse_max_memory(args.max_memory, gpu_count)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid --max-memory JSON.") from exc
+
+    if max_memory is None and device_map is not None and gpu_count > 0:
+        max_memory = {
+            idx: int(torch.cuda.mem_get_info(idx)[0] * 0.9) for idx in range(gpu_count)
+        }
+        report("Inferred max_memory from free GPU memory.")
+
     report("Loading model.")
-    torch_dtype = torch.bfloat16 if args.device == "cuda" else None
     model = PolicyModel(
         args.model_path,
         torch_dtype=torch_dtype,
         device_map=device_map,
         trust_remote_code=True,
+        max_memory=max_memory,
+        offload_folder=args.offload_folder,
+        offload_state_dict=args.offload_state_dict,
     )
 
     report("Preparing device.")
@@ -278,18 +322,25 @@ def main() -> None:
         print("=== Tool Call ===")
         print(last_action)
 
-        if tool_name in tool_init_errors:
-            last_observation = f"[Tool Error] Failed to initialize '{tool_name}': {tool_init_errors[tool_name]}"
-        elif tool_name not in tool_registry:
+        if tool_name not in tool_registry:
             last_observation = (
                 f"[Tool Error] Unknown tool '{tool_name}'. Available: {', '.join(sorted(tool_registry))}"
             )
         else:
-            report(f"Executing tool '{tool_name}' (step {step}/{args.max_steps}).")
-            try:
-                last_observation = tool_registry[tool_name].call(tool_params)
-            except Exception as exc:
-                last_observation = f"[Tool Error] {tool_name} failed: {exc}"
+            if tool_name not in tool_instances and tool_name not in tool_init_errors:
+                try:
+                    tool_instances[tool_name] = tool_registry[tool_name]()
+                except Exception as exc:
+                    tool_init_errors[tool_name] = str(exc)
+
+            if tool_name in tool_init_errors:
+                last_observation = f"[Tool Error] Failed to initialize '{tool_name}': {tool_init_errors[tool_name]}"
+            else:
+                report(f"Executing tool '{tool_name}' (step {step}/{args.max_steps}).")
+                try:
+                    last_observation = tool_instances[tool_name].call(tool_params)
+                except Exception as exc:
+                    last_observation = f"[Tool Error] {tool_name} failed: {exc}"
 
         print("=== Tool Response ===")
         print(last_observation)

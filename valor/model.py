@@ -46,6 +46,29 @@ def _resolve_hidden_size(config) -> int:
     raise ValueError("Could not infer hidden size from model config.")
 
 
+def _load_backbone(
+    backbone_name: str,
+    torch_dtype: Optional[torch.dtype],
+    device_map: Optional[str | dict],
+    trust_remote_code: bool,
+    max_memory: Optional[dict] = None,
+    offload_folder: Optional[str] = None,
+    offload_state_dict: bool = False,
+) -> AutoModelForCausalLM:
+    config = AutoConfig.from_pretrained(backbone_name, trust_remote_code=trust_remote_code)
+    return AutoModelForCausalLM.from_pretrained(
+        backbone_name,
+        config=config,
+        torch_dtype=torch_dtype,
+        device_map=device_map,
+        trust_remote_code=trust_remote_code,
+        max_memory=max_memory,
+        offload_folder=offload_folder,
+        offload_state_dict=offload_state_dict,
+        low_cpu_mem_usage=True,
+    )
+
+
 class PolicyModel(nn.Module):
     def __init__(
         self,
@@ -53,15 +76,19 @@ class PolicyModel(nn.Module):
         torch_dtype: Optional[torch.dtype] = None,
         device_map: Optional[str | dict] = None,
         trust_remote_code: bool = True,
+        max_memory: Optional[dict] = None,
+        offload_folder: Optional[str] = None,
+        offload_state_dict: bool = False,
     ) -> None:
         super().__init__()
-        config = AutoConfig.from_pretrained(backbone_name, trust_remote_code=trust_remote_code)
-        self.backbone = AutoModelForCausalLM.from_pretrained(
+        self.backbone = _load_backbone(
             backbone_name,
-            config=config,
             torch_dtype=torch_dtype,
             device_map=device_map,
             trust_remote_code=trust_remote_code,
+            max_memory=max_memory,
+            offload_folder=offload_folder,
+            offload_state_dict=offload_state_dict,
         )
 
     def forward(
@@ -91,15 +118,19 @@ class ValueModel(nn.Module):
         torch_dtype: Optional[torch.dtype] = None,
         device_map: Optional[str | dict] = None,
         trust_remote_code: bool = True,
+        max_memory: Optional[dict] = None,
+        offload_folder: Optional[str] = None,
+        offload_state_dict: bool = False,
     ) -> None:
         super().__init__()
-        config = AutoConfig.from_pretrained(backbone_name, trust_remote_code=trust_remote_code)
-        self.backbone = AutoModelForCausalLM.from_pretrained(
+        self.backbone = _load_backbone(
             backbone_name,
-            config=config,
             torch_dtype=torch_dtype,
             device_map=device_map,
             trust_remote_code=trust_remote_code,
+            max_memory=max_memory,
+            offload_folder=offload_folder,
+            offload_state_dict=offload_state_dict,
         )
         hidden_size = _resolve_hidden_size(self.backbone.config)
         self.value_head = nn.Linear(hidden_size, 2)
