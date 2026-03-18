@@ -9,6 +9,10 @@ OUTPUT FORMAT (required):
 <tool_call>...</tool_call>
 Raise exactly one tool_call.
 
+Tool use:
+- Tool_call must be a single JSON object with keys "tool" and "parameters".
+- "parameters" must be a JSON object that matches the tool's parameters schema (not a list).
+
 Important: At the next timestep, you will only see the latest report and the latest tool call + tool response. Keep the report concise but include all critical facts, uncertainties, and decisions needed to continue.
 
 Input
@@ -31,6 +35,10 @@ instruction_prompt = '''You are a research agent.
 OUTPUT FORMAT (required):
 <report>...</report>
 Either <answer>...</answer> OR <tool_call>...</tool_call> (never both)
+
+Tool use:
+- Tool_call must be a single JSON object with keys "tool" and "parameters".
+- "parameters" must be a JSON object that matches the tool's parameters schema (not a list).
 
 Important: At the next timestep, you will only see the latest report and the latest tool call + tool response. Keep the report concise but include all critical facts, uncertainties, and decisions needed to continue.
 
