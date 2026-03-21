@@ -386,14 +386,16 @@ def _prepare_browsecomp_imports(root: Path) -> Callable[[str, str | None], str]:
     return formatter
 
 
-def _load_searcher_class(searcher_type: str) -> Any:
+def _load_searcher_class(searcher_type: str, browsecomp_root: Path) -> Any:
     import importlib
+    import importlib.util
+    import types
 
     mapping: dict[str, tuple[str, str]] = {
-        "bm25": ("searcher.searchers.bm25_searcher", "BM25Searcher"),
-        "faiss": ("searcher.searchers.faiss_searcher", "FaissSearcher"),
-        "reasonir": ("searcher.searchers.faiss_searcher", "ReasonIrSearcher"),
-        "custom": ("searcher.searchers.custom_searcher", "CustomSearcher"),
+        "bm25": ("bm25_searcher.py", "BM25Searcher"),
+        "faiss": ("faiss_searcher.py", "FaissSearcher"),
+        "reasonir": ("faiss_searcher.py", "ReasonIrSearcher"),
+        "custom": ("custom_searcher.py", "CustomSearcher"),
     }
 
     if searcher_type not in mapping:
@@ -401,9 +403,64 @@ def _load_searcher_class(searcher_type: str) -> Any:
             f"Unknown searcher type '{searcher_type}'. Supported: {', '.join(SEARCHER_CHOICES)}"
         )
 
-    module_name, class_name = mapping[searcher_type]
-    module = importlib.import_module(module_name)
-    return getattr(module, class_name)
+    # Fast path: standard import works when dependencies are all available.
+    module_name_std_map = {
+        "bm25": "searcher.searchers.bm25_searcher",
+        "faiss": "searcher.searchers.faiss_searcher",
+        "reasonir": "searcher.searchers.faiss_searcher",
+        "custom": "searcher.searchers.custom_searcher",
+    }
+    class_name = mapping[searcher_type][1]
+    module_name_std = module_name_std_map[searcher_type]
+    try:
+        module = importlib.import_module(module_name_std)
+        return getattr(module, class_name)
+    except Exception:
+        pass
+
+    # Fallback: load target module directly from file to avoid executing
+    # searcher/searchers/__init__.py, which imports BM25 unconditionally.
+    searchers_dir = browsecomp_root / "searcher" / "searchers"
+    base_path = searchers_dir / "base.py"
+    target_filename, class_name = mapping[searcher_type]
+    target_path = searchers_dir / target_filename
+
+    if not target_path.is_file():
+        raise FileNotFoundError(f"Searcher module file not found: {target_path}")
+
+    searcher_pkg_name = "searcher"
+    searchers_pkg_name = "searcher.searchers"
+
+    if searcher_pkg_name not in sys.modules:
+        pkg = types.ModuleType(searcher_pkg_name)
+        pkg.__path__ = [str(browsecomp_root / "searcher")]
+        sys.modules[searcher_pkg_name] = pkg
+
+    if searchers_pkg_name not in sys.modules:
+        pkg = types.ModuleType(searchers_pkg_name)
+        pkg.__path__ = [str(searchers_dir)]
+        sys.modules[searchers_pkg_name] = pkg
+
+    base_module_name = "searcher.searchers.base"
+    if base_module_name not in sys.modules:
+        base_spec = importlib.util.spec_from_file_location(base_module_name, base_path)
+        if base_spec is None or base_spec.loader is None:
+            raise RuntimeError(f"Failed to create spec for {base_path}")
+        base_module = importlib.util.module_from_spec(base_spec)
+        base_module.__package__ = searchers_pkg_name
+        sys.modules[base_module_name] = base_module
+        base_spec.loader.exec_module(base_module)
+
+    target_module_name = f"searcher.searchers.{target_path.stem}"
+    target_spec = importlib.util.spec_from_file_location(target_module_name, target_path)
+    if target_spec is None or target_spec.loader is None:
+        raise RuntimeError(f"Failed to create spec for {target_path}")
+    target_module = importlib.util.module_from_spec(target_spec)
+    target_module.__package__ = searchers_pkg_name
+    sys.modules[target_module_name] = target_module
+    target_spec.loader.exec_module(target_module)
+
+    return getattr(target_module, class_name)
 
 
 def _build_arg_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace, Callable[[str, str | None], str]]:
@@ -415,7 +472,7 @@ def _build_arg_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace
     browsecomp_root = Path(bootstrap_args.browsecomp_root).expanduser().resolve()
     searcher_type = str(bootstrap_args.searcher_type)
     format_query = _prepare_browsecomp_imports(browsecomp_root)
-    searcher_class = _load_searcher_class(searcher_type)
+    searcher_class = _load_searcher_class(searcher_type, browsecomp_root)
 
     parser = argparse.ArgumentParser(
         description="Run VALOR on BrowseComp-Plus with local retriever tools."
