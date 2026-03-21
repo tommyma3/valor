@@ -7,9 +7,10 @@ requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.13.0",
     "flash-linear-attention>=0.4.2",
-    "huggingface-hub>=1.7.1",
+    "huggingface-hub[cli]>=1.7.1",
     "pandas>=3.0.1",
     "pyarrow>=23.0.1",
+    "pyserini>=1.1.0",
     "ray>=2.54.0",
     "requests>=2.32.5",
     "safetensors>=0.7.0",
