@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+import requests
 import torch
 from transformers import AutoTokenizer
 from tqdm import tqdm
@@ -183,6 +184,36 @@ def _generate_completion(
         )
     text = tokenizer.decode(generated[0], skip_special_tokens=True)
     return text[len(prompt) :].strip()
+
+
+def _sglang_chat(
+    base_url: str,
+    model_name: str,
+    prompt: str,
+    *,
+    temperature: float,
+    top_p: float,
+    max_new_tokens: int,
+    api_key: str,
+    timeout: int,
+) -> str:
+    url = base_url.rstrip("/") + "/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_new_tokens,
+    }
+
+    response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    data = response.json()
+    return str(data["choices"][0]["message"]["content"]).strip()
 
 
 def _read_queries_tsv(path: Path) -> list[tuple[str, str]]:
@@ -493,6 +524,28 @@ def _build_arg_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace
     parser.add_argument("--offload-folder", default=None)
     parser.add_argument("--offload-state-dict", action="store_true")
 
+    parser.add_argument(
+        "--sglang-url",
+        default="",
+        help="SGLang OpenAI-compatible base URL. If set, rollouts use SGLang for generation.",
+    )
+    parser.add_argument(
+        "--sglang-model",
+        default="",
+        help="Model name sent to SGLang. Defaults to --model-path when omitted.",
+    )
+    parser.add_argument(
+        "--sglang-api-key",
+        default=os.getenv("SGLANG_API_KEY", ""),
+        help="API key for SGLang server (optional).",
+    )
+    parser.add_argument(
+        "--sglang-timeout",
+        type=int,
+        default=120,
+        help="Timeout (seconds) for SGLang generation requests.",
+    )
+
     parser.add_argument("--max-new-tokens", type=int, default=768)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=0.9)
@@ -635,31 +688,45 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
         logger.info("Nothing to run.")
         return
 
-    torch_dtype = _resolve_dtype(args.dtype, args.device)
-    gpu_count = torch.cuda.device_count() if args.device == "cuda" else 0
-    max_memory = _parse_max_memory(args.max_memory, gpu_count)
-    if max_memory is None and args.device_map is not None and gpu_count > 0:
-        max_memory = {idx: int(torch.cuda.mem_get_info(idx)[0] * 0.9) for idx in range(gpu_count)}
+    use_sglang = bool(args.sglang_url.strip())
+    sglang_model_name = args.sglang_model.strip() or args.model_path
 
-    logger.info("Loading model from %s", args.model_path)
-    model = PolicyModel(
-        args.model_path,
-        torch_dtype=torch_dtype,
-        device_map=args.device_map,
-        trust_remote_code=True,
-        max_memory=max_memory,
-        offload_folder=args.offload_folder,
-        offload_state_dict=args.offload_state_dict,
-    )
+    model: PolicyModel | None = None
+    tokenizer: AutoTokenizer | None = None
+    device: torch.device | None = None
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if use_sglang:
+        logger.info(
+            "Using SGLang backend | url=%s | model=%s",
+            args.sglang_url,
+            sglang_model_name,
+        )
+    else:
+        torch_dtype = _resolve_dtype(args.dtype, args.device)
+        gpu_count = torch.cuda.device_count() if args.device == "cuda" else 0
+        max_memory = _parse_max_memory(args.max_memory, gpu_count)
+        if max_memory is None and args.device_map is not None and gpu_count > 0:
+            max_memory = {idx: int(torch.cuda.mem_get_info(idx)[0] * 0.9) for idx in range(gpu_count)}
 
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    if args.device_map is None:
-        model.to(device)
-    model.eval()
+        logger.info("Loading model from %s", args.model_path)
+        model = PolicyModel(
+            args.model_path,
+            torch_dtype=torch_dtype,
+            device_map=args.device_map,
+            trust_remote_code=True,
+            max_memory=max_memory,
+            offload_folder=args.offload_folder,
+            offload_state_dict=args.offload_state_dict,
+        )
+
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+        if args.device_map is None:
+            model.to(device)
+        model.eval()
 
     snippet_tokenizer = None
     if args.snippet_max_tokens > 0 and args.snippet_tokenizer:
@@ -753,15 +820,28 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                     observation=last_observation,
                 )
 
-            completion = _generate_completion(
-                model,
-                tokenizer,
-                prompt,
-                device=device,
-                max_new_tokens=args.max_new_tokens,
-                temperature=args.temperature,
-                top_p=args.top_p,
-            )
+            if use_sglang:
+                completion = _sglang_chat(
+                    args.sglang_url,
+                    sglang_model_name,
+                    prompt,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    max_new_tokens=args.max_new_tokens,
+                    api_key=args.sglang_api_key,
+                    timeout=args.sglang_timeout,
+                )
+            else:
+                assert model is not None and tokenizer is not None and device is not None
+                completion = _generate_completion(
+                    model,
+                    tokenizer,
+                    prompt,
+                    device=device,
+                    max_new_tokens=args.max_new_tokens,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                )
 
             report_text = _extract_tag(completion, "report")
             answer_text = _extract_tag(completion, "answer")
@@ -865,6 +945,8 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                 "max_steps": args.max_steps,
                 "max_new_tokens": args.max_new_tokens,
                 "agent_prompt_template": args.agent_prompt_template,
+                "generation_backend": "sglang" if use_sglang else "local",
+                "generation_model": sglang_model_name if use_sglang else args.model_path,
             },
             "query_id": query_id,
             "tool_call_counts": runtime.tool_call_counts,
