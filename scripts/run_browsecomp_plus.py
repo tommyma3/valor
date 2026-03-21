@@ -36,6 +36,7 @@ QUERY_TEMPLATE_CHOICES = [
 ]
 
 AGENT_PROMPT_TEMPLATE_CHOICES = ["browsecomp", "default"]
+SEARCHER_CHOICES = ["bm25", "faiss", "reasonir", "custom"]
 
 SEARCH_TOOL_PARAMETERS = {
     "type": "object",
@@ -363,15 +364,13 @@ class BrowseCompToolRuntime:
         return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-def _prepare_browsecomp_imports(root: Path) -> tuple[Any, Callable[[str, str | None], str]]:
+def _prepare_browsecomp_imports(root: Path) -> Callable[[str, str | None], str]:
     if not root.is_dir():
         raise FileNotFoundError(f"BrowseComp-Plus root does not exist: {root}")
 
     root_str = str(root.resolve())
     if root_str not in sys.path:
         sys.path.insert(0, root_str)
-
-    from searcher.searchers import SearcherType  # type: ignore
 
     def _identity(query: str, query_template: str | None = None) -> str:
         del query_template
@@ -384,19 +383,39 @@ def _prepare_browsecomp_imports(root: Path) -> tuple[Any, Callable[[str, str | N
     except Exception:
         formatter = _identity
 
-    return SearcherType, formatter
+    return formatter
+
+
+def _load_searcher_class(searcher_type: str) -> Any:
+    import importlib
+
+    mapping: dict[str, tuple[str, str]] = {
+        "bm25": ("searcher.searchers.bm25_searcher", "BM25Searcher"),
+        "faiss": ("searcher.searchers.faiss_searcher", "FaissSearcher"),
+        "reasonir": ("searcher.searchers.faiss_searcher", "ReasonIrSearcher"),
+        "custom": ("searcher.searchers.custom_searcher", "CustomSearcher"),
+    }
+
+    if searcher_type not in mapping:
+        raise ValueError(
+            f"Unknown searcher type '{searcher_type}'. Supported: {', '.join(SEARCHER_CHOICES)}"
+        )
+
+    module_name, class_name = mapping[searcher_type]
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)
 
 
 def _build_arg_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace, Callable[[str, str | None], str]]:
     bootstrap = argparse.ArgumentParser(add_help=False)
     bootstrap.add_argument("--browsecomp-root", required=True)
-    bootstrap.add_argument("--searcher-type", required=True)
+    bootstrap.add_argument("--searcher-type", required=True, choices=SEARCHER_CHOICES)
     bootstrap_args, _ = bootstrap.parse_known_args(argv)
 
     browsecomp_root = Path(bootstrap_args.browsecomp_root).expanduser().resolve()
     searcher_type = str(bootstrap_args.searcher_type)
-    SearcherType, format_query = _prepare_browsecomp_imports(browsecomp_root)
-    searcher_class = SearcherType.get_searcher_class(searcher_type)
+    format_query = _prepare_browsecomp_imports(browsecomp_root)
+    searcher_class = _load_searcher_class(searcher_type)
 
     parser = argparse.ArgumentParser(
         description="Run VALOR on BrowseComp-Plus with local retriever tools."
@@ -430,7 +449,7 @@ def _build_arg_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace
         help="System prompt template used by VALOR agent for this benchmark.",
     )
 
-    parser.add_argument("--searcher-type", choices=SearcherType.get_choices(), required=True)
+    parser.add_argument("--searcher-type", choices=SEARCHER_CHOICES, required=True)
     parser.add_argument("--k", type=int, default=5, help="Top-k results returned by search tool.")
     parser.add_argument(
         "--snippet-max-tokens",
