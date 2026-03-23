@@ -114,7 +114,7 @@ class QAPair:
     answer: str
 
 
-def load_qa_pairs(queries_tsv: Path, answers_jsonl: Path) -> dict[str, QAPair]:
+def load_browsecomp_qa_pairs(queries_tsv: Path, answers_jsonl: Path) -> dict[str, QAPair]:
     queries: dict[str, str] = {}
     with queries_tsv.open("r", encoding="utf-8", newline="") as f:
         reader = csv.reader(f, delimiter="\t")
@@ -143,6 +143,80 @@ def load_qa_pairs(queries_tsv: Path, answers_jsonl: Path) -> dict[str, QAPair]:
     return qa_pairs
 
 
+def normalize_answer_field(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value).strip()
+    if isinstance(value, list):
+        parts = [normalize_answer_field(item) for item in value]
+        return " ".join(part for part in parts if part).strip()
+    if isinstance(value, dict):
+        for key in ("answer", "text", "content", "output", "value", "final_answer"):
+            if key in value:
+                normalized = normalize_answer_field(value.get(key))
+                if normalized:
+                    return normalized
+    return ""
+
+
+def load_webshaper_qa_pairs(
+    dataset_name: str,
+    split: str,
+    question_field: str,
+    answer_field: str,
+    id_field: str | None,
+    logger: logging.Logger,
+) -> dict[str, QAPair]:
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise ImportError(
+            "The `datasets` package is required for --train-qa-source=webshaper. "
+            "Install it with: uv pip install datasets"
+        ) from exc
+
+    logger.info("Loading training dataset from Hugging Face: %s (split=%s)", dataset_name, split)
+    dataset = load_dataset(dataset_name, split=split)
+
+    qa_pairs: dict[str, QAPair] = {}
+    skipped = 0
+
+    for idx, row in enumerate(dataset):
+        if not isinstance(row, dict):
+            skipped += 1
+            continue
+
+        query = str(row.get(question_field, "")).strip()
+        answer = normalize_answer_field(row.get(answer_field))
+        if not query or not answer:
+            skipped += 1
+            continue
+
+        raw_query_id = ""
+        if id_field:
+            raw_query_id = str(row.get(id_field, "")).strip()
+        if not raw_query_id:
+            raw_query_id = f"webshaper_{idx:07d}"
+
+        query_id = safe_query_id(raw_query_id)
+        if not query_id:
+            query_id = f"webshaper_{idx:07d}"
+        if query_id in qa_pairs:
+            query_id = f"{query_id}_{idx:07d}"
+
+        qa_pairs[query_id] = QAPair(query_id=query_id, query=query, answer=answer)
+
+    logger.info(
+        "Loaded WebShaper QA pairs: kept=%d skipped=%d (missing/invalid fields)",
+        len(qa_pairs),
+        skipped,
+    )
+    return qa_pairs
+
+
 def load_query_ids(path: Path) -> list[str]:
     ids: list[str] = []
     with path.open("r", encoding="utf-8") as f:
@@ -161,6 +235,17 @@ def write_query_ids(path: Path, query_ids: list[str]) -> None:
             f.write("\n")
 
 
+def write_queries_tsv(path: Path, query_ids: list[str], qa_pairs: dict[str, QAPair]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter="\t")
+        for qid in query_ids:
+            qa = qa_pairs.get(qid)
+            if qa is None:
+                continue
+            writer.writerow([qid, qa.query])
+
+
 def extract_final_answer(run_record: dict[str, Any]) -> str:
     result = run_record.get("result", [])
     if not isinstance(result, list):
@@ -175,6 +260,7 @@ def build_rollout_command(
     args: argparse.Namespace,
     model_path: str,
     output_dir: Path,
+    queries_tsv: Path,
     query_id_file: Path,
     save_traces: bool,
 ) -> list[str]:
@@ -184,7 +270,7 @@ def build_rollout_command(
         "--browsecomp-root",
         str(args.browsecomp_root),
         "--queries",
-        str(args.queries_tsv),
+        str(queries_tsv),
         "--output-dir",
         str(output_dir),
         "--model-path",
@@ -471,7 +557,7 @@ def maybe_run_official_eval(
         "--input_dir",
         str(rollout_dir),
         "--ground_truth",
-        str(args.answers_jsonl),
+        str(args.eval_answers_jsonl),
         "--eval_dir",
         str(eval_root),
         "--model",
@@ -501,12 +587,42 @@ def maybe_run_official_eval(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="RL training loop for VALOR on BrowseComp-Plus QA pairs."
+        description="RL training loop for VALOR with WebShaper training data and BrowseComp-Plus evaluation."
     )
     parser.add_argument("--browsecomp-root", type=Path, required=True)
-    parser.add_argument("--queries-tsv", type=Path, default=None)
-    parser.add_argument("--answers-jsonl", type=Path, default=None)
+    parser.add_argument(
+        "--eval-queries-tsv",
+        "--queries-tsv",
+        dest="eval_queries_tsv",
+        type=Path,
+        default=None,
+    )
+    parser.add_argument(
+        "--eval-answers-jsonl",
+        "--answers-jsonl",
+        dest="eval_answers_jsonl",
+        type=Path,
+        default=None,
+    )
     parser.add_argument("--output-root", type=Path, required=True)
+
+    parser.add_argument(
+        "--train-qa-source",
+        choices=["webshaper", "browsecomp"],
+        default="webshaper",
+        help="Source of RL training QA pairs.",
+    )
+    parser.add_argument("--train-queries-tsv", type=Path, default=None)
+    parser.add_argument("--train-answers-jsonl", type=Path, default=None)
+    parser.add_argument("--webshaper-dataset", default="Alibaba-NLP/WebShaper")
+    parser.add_argument("--webshaper-split", default="main")
+    parser.add_argument("--webshaper-question-field", default="question")
+    parser.add_argument("--webshaper-answer-field", default="answer")
+    parser.add_argument(
+        "--webshaper-id-field",
+        default="id",
+        help="Field used as query id. Set empty string to auto-generate ids.",
+    )
 
     parser.add_argument("--num-iters", type=int, default=3)
     parser.add_argument("--policy-init-model", default="Qwen/Qwen3.5-35B-A3B")
@@ -613,33 +729,54 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
 
     args.browsecomp_root = args.browsecomp_root.expanduser().resolve()
-    if args.queries_tsv is None:
-        args.queries_tsv = args.browsecomp_root / "topics-qrels" / "queries.tsv"
+    if args.eval_queries_tsv is None:
+        args.eval_queries_tsv = args.browsecomp_root / "topics-qrels" / "queries.tsv"
     else:
-        args.queries_tsv = args.queries_tsv.expanduser().resolve()
+        args.eval_queries_tsv = args.eval_queries_tsv.expanduser().resolve()
 
-    if args.answers_jsonl is None:
-        args.answers_jsonl = args.browsecomp_root / "data" / "browsecomp_plus_decrypted.jsonl"
+    if args.eval_answers_jsonl is None:
+        args.eval_answers_jsonl = args.browsecomp_root / "data" / "browsecomp_plus_decrypted.jsonl"
     else:
-        args.answers_jsonl = args.answers_jsonl.expanduser().resolve()
+        args.eval_answers_jsonl = args.eval_answers_jsonl.expanduser().resolve()
+
+    if args.train_query_id_file is not None:
+        args.train_query_id_file = args.train_query_id_file.expanduser().resolve()
+    if args.eval_query_id_file is not None:
+        args.eval_query_id_file = args.eval_query_id_file.expanduser().resolve()
+
+    if args.train_qa_source == "browsecomp":
+        if args.train_queries_tsv is None:
+            args.train_queries_tsv = args.eval_queries_tsv
+        else:
+            args.train_queries_tsv = args.train_queries_tsv.expanduser().resolve()
+
+        if args.train_answers_jsonl is None:
+            args.train_answers_jsonl = args.eval_answers_jsonl
+        else:
+            args.train_answers_jsonl = args.train_answers_jsonl.expanduser().resolve()
 
     args.output_root = args.output_root.expanduser().resolve()
 
     return args
 
 
-def select_query_ids(args: argparse.Namespace, qa_pairs: dict[str, QAPair]) -> tuple[list[str], list[str]]:
-    all_ids = sorted(qa_pairs.keys())
+def select_query_ids(
+    args: argparse.Namespace,
+    train_qa_pairs: dict[str, QAPair],
+    eval_qa_pairs: dict[str, QAPair],
+) -> tuple[list[str], list[str]]:
+    train_all_ids = sorted(train_qa_pairs.keys())
+    eval_all_ids = sorted(eval_qa_pairs.keys())
 
     if args.train_query_id_file is not None:
-        train_ids = [qid for qid in load_query_ids(args.train_query_id_file) if qid in qa_pairs]
+        train_ids = [qid for qid in load_query_ids(args.train_query_id_file) if qid in train_qa_pairs]
     else:
-        train_ids = list(all_ids)
+        train_ids = list(train_all_ids)
 
     if args.eval_query_id_file is not None:
-        eval_ids = [qid for qid in load_query_ids(args.eval_query_id_file) if qid in qa_pairs]
+        eval_ids = [qid for qid in load_query_ids(args.eval_query_id_file) if qid in eval_qa_pairs]
     else:
-        eval_ids = list(all_ids)
+        eval_ids = list(eval_all_ids)
 
     if args.max_train_queries is not None:
         train_ids = train_ids[: args.max_train_queries]
@@ -669,16 +806,47 @@ def main() -> None:
     args.output_root.mkdir(parents=True, exist_ok=True)
     logger = configure_logger(args.output_root)
 
-    if not args.queries_tsv.is_file():
-        raise FileNotFoundError(f"queries TSV not found: {args.queries_tsv}")
-    if not args.answers_jsonl.is_file():
-        raise FileNotFoundError(f"answers JSONL not found: {args.answers_jsonl}")
+    if args.hf_token:
+        import os
 
-    qa_pairs = load_qa_pairs(args.queries_tsv, args.answers_jsonl)
-    if not qa_pairs:
-        raise ValueError("No QA pairs loaded from BrowseComp-Plus files.")
+        os.environ["HF_TOKEN"] = args.hf_token
+        os.environ["HUGGINGFACE_HUB_TOKEN"] = args.hf_token
+    if args.hf_home:
+        import os
 
-    train_ids, eval_ids = select_query_ids(args, qa_pairs)
+        os.environ["HF_HOME"] = args.hf_home
+
+    if not args.eval_queries_tsv.is_file():
+        raise FileNotFoundError(f"eval queries TSV not found: {args.eval_queries_tsv}")
+    if not args.eval_answers_jsonl.is_file():
+        raise FileNotFoundError(f"eval answers JSONL not found: {args.eval_answers_jsonl}")
+
+    eval_qa_pairs = load_browsecomp_qa_pairs(args.eval_queries_tsv, args.eval_answers_jsonl)
+    if not eval_qa_pairs:
+        raise ValueError("No eval QA pairs loaded from BrowseComp-Plus files.")
+
+    if args.train_qa_source == "webshaper":
+        train_qa_pairs = load_webshaper_qa_pairs(
+            dataset_name=args.webshaper_dataset,
+            split=args.webshaper_split,
+            question_field=args.webshaper_question_field,
+            answer_field=args.webshaper_answer_field,
+            id_field=args.webshaper_id_field.strip() or None,
+            logger=logger,
+        )
+    else:
+        assert args.train_queries_tsv is not None
+        assert args.train_answers_jsonl is not None
+        if not args.train_queries_tsv.is_file():
+            raise FileNotFoundError(f"train queries TSV not found: {args.train_queries_tsv}")
+        if not args.train_answers_jsonl.is_file():
+            raise FileNotFoundError(f"train answers JSONL not found: {args.train_answers_jsonl}")
+        train_qa_pairs = load_browsecomp_qa_pairs(args.train_queries_tsv, args.train_answers_jsonl)
+
+    if not train_qa_pairs:
+        raise ValueError("No training QA pairs loaded.")
+
+    train_ids, eval_ids = select_query_ids(args, train_qa_pairs, eval_qa_pairs)
     if not train_ids:
         raise ValueError("No training query ids selected.")
     if not eval_ids:
@@ -687,10 +855,16 @@ def main() -> None:
     splits_dir = args.output_root / "splits"
     train_ids_file = splits_dir / "train_ids.txt"
     eval_ids_file = splits_dir / "eval_ids.txt"
+    train_queries_tsv = splits_dir / "train_queries.tsv"
+    eval_queries_tsv = splits_dir / "eval_queries.tsv"
+
     write_query_ids(train_ids_file, train_ids)
     write_query_ids(eval_ids_file, eval_ids)
+    write_queries_tsv(train_queries_tsv, train_ids, train_qa_pairs)
+    write_queries_tsv(eval_queries_tsv, eval_ids, eval_qa_pairs)
 
-    logger.info("Loaded QA pairs: %d", len(qa_pairs))
+    logger.info("Loaded train QA pairs (%s): %d", args.train_qa_source, len(train_qa_pairs))
+    logger.info("Loaded eval QA pairs (browsecomp): %d", len(eval_qa_pairs))
     logger.info("Train queries: %d | Eval queries: %d", len(train_ids), len(eval_ids))
 
     if args.rollout_sglang_url:
@@ -737,12 +911,13 @@ def main() -> None:
             args,
             model_path=current_policy_model,
             output_dir=eval_rollout_dir,
+            queries_tsv=eval_queries_tsv,
             query_id_file=eval_ids_file,
             save_traces=False,
         )
         run_command(eval_cmd, logger, cwd=REPO_ROOT)
 
-        em_score = compute_em_score(eval_rollout_dir, eval_ids, qa_pairs)
+        em_score = compute_em_score(eval_rollout_dir, eval_ids, eval_qa_pairs)
         official_score = maybe_run_official_eval(args, eval_rollout_dir, baseline_dir, logger)
 
         baseline_metric = {
@@ -782,6 +957,7 @@ def main() -> None:
             args,
             model_path=current_policy_model,
             output_dir=train_rollout_dir,
+            queries_tsv=train_queries_tsv,
             query_id_file=train_ids_file,
             save_traces=True,
         )
@@ -791,7 +967,7 @@ def main() -> None:
         transitions_path = data_dir / "trajectories.jsonl"
         dataset_stats = build_dataset_from_rollouts(
             train_rollout_dir,
-            qa_pairs,
+            train_qa_pairs,
             transitions_path,
             logger,
         )
@@ -901,12 +1077,13 @@ def main() -> None:
             args,
             model_path=str(policy_ckpt),
             output_dir=eval_rollout_dir,
+            queries_tsv=eval_queries_tsv,
             query_id_file=eval_ids_file,
             save_traces=False,
         )
         run_command(rollout_eval_cmd, logger, cwd=REPO_ROOT)
 
-        em_score = compute_em_score(eval_rollout_dir, eval_ids, qa_pairs)
+        em_score = compute_em_score(eval_rollout_dir, eval_ids, eval_qa_pairs)
         official_score = maybe_run_official_eval(args, eval_rollout_dir, iter_dir, logger)
 
         metric = {
@@ -943,6 +1120,11 @@ def main() -> None:
                 "policy_init_model": args.policy_init_model,
                 "value_init_model": args.value_init_model,
                 "num_iters": args.num_iters,
+                "train_qa_source": args.train_qa_source,
+                "webshaper_dataset": args.webshaper_dataset if args.train_qa_source == "webshaper" else None,
+                "webshaper_split": args.webshaper_split if args.train_qa_source == "webshaper" else None,
+                "eval_queries_tsv": str(args.eval_queries_tsv),
+                "eval_answers_jsonl": str(args.eval_answers_jsonl),
             },
         }
         save_state(state_path, state)

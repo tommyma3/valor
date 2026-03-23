@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.13.0",
+    "datasets>=3.0.0",
     "faiss-cpu>=1.8.0",
     "flash-linear-attention>=0.4.2",
     "huggingface-hub[cli]>=1.7.1",

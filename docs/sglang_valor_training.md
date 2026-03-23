@@ -7,7 +7,9 @@ This note explains how to set up **SGLang** and run the new RL loop script:
 
 ## 1) Prerequisites
 
-- BrowseComp-Plus is prepared (queries + decrypted answers + retriever index).
+- BrowseComp-Plus is prepared for evaluation (queries + decrypted answers + retriever index).
+- WebShaper training data is accessible on Hugging Face (`Alibaba-NLP/WebShaper`).
+- WebShaper loader defaults: `--webshaper-split main`, question/answer/id fields = `question`/`answer`/`id`.
 - Your Python env has the project dependencies installed.
 - You can run a retriever (`--searcher-type faiss` or `bm25`).
 
@@ -58,18 +60,21 @@ uv run python scripts/train_browsecomp_plus_rl.py \
   --rollout-sglang-model "Qwen/Qwen3.5-35B-A3B" \
   --rollout-max-steps 24 \
   --rollout-max-new-tokens 768 \
-  --agent-prompt-template browsecomp
+  --agent-prompt-template browsecomp \
+  --train-qa-source webshaper \
+  --webshaper-dataset "Alibaba-NLP/WebShaper" \
+  --webshaper-split main
 ```
 
 What this does per iteration:
 
-1. rollout trajectories on QA pairs (via SGLang)
+1. rollout training trajectories on WebShaper QA pairs (via SGLang)
 2. build transition dataset from traces
 3. compute rewards (`final_answer` vs `gold_answer`)
 4. train value model (`Qwen/Qwen3.5-9B` backbone)
 5. compute advantages
 6. train policy model (`Qwen/Qwen3.5-35B-A3B` backbone)
-7. evaluate and log score
+7. evaluate on BrowseComp-Plus and log score
 
 ## 4) Multi-Iteration With Updated Policy Checkpoints
 
@@ -94,7 +99,10 @@ uv run python scripts/train_browsecomp_plus_rl.py \
   --num-iters 3 \
   --resume \
   --rollout-sglang-url "http://127.0.0.1:8000" \
-  --rollout-sglang-model "runs/browsecomp_plus/rl_qwen35b_sglang/iter_001/checkpoints/policy"
+  --rollout-sglang-model "runs/browsecomp_plus/rl_qwen35b_sglang/iter_001/checkpoints/policy" \
+  --train-qa-source webshaper \
+  --webshaper-dataset "Alibaba-NLP/WebShaper" \
+  --webshaper-split main
 ```
 
 Repeat this pattern between iterations (restart server with newest `iter_XXX/checkpoints/policy`).
