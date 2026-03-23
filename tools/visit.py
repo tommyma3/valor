@@ -35,6 +35,9 @@ except ImportError:
 # Optional summary model/api-key wiring (useful for Moonshot/Kimi endpoints).
 SUMMARY_LLM_MODEL = os.getenv("SUMMARY_LLM_MODEL", os.getenv("MOONSHOT_MODEL", ""))
 SUMMARY_LLM_API_KEY = os.getenv("SUMMARY_LLM_API_KEY", os.getenv("MOONSHOT_API_KEY", ""))
+SUMMARY_LLM_MAX_TOKENS = int(os.getenv("SUMMARY_LLM_MAX_TOKENS", "2048"))
+SUMMARY_LLM_TIMEOUT = int(os.getenv("SUMMARY_LLM_TIMEOUT", "120"))
+VISIT_CHARS_PER_TOKEN = int(os.getenv("VISIT_CHARS_PER_TOKEN", "4"))
 
 try:
     from .pdf_parser import download_pdf, parse_pdf
@@ -143,6 +146,8 @@ class Visit:
         summary_llm_auth: Optional[str] = None,
         summary_llm_model: Optional[str] = None,
         summary_llm_api_key: Optional[str] = None,
+        summary_llm_max_tokens: Optional[int] = None,
+        summary_llm_timeout: Optional[int] = None,
         max_webpage_tokens: int = None
     ):
         """
@@ -155,6 +160,8 @@ class Visit:
             summary_llm_auth: Authorization header for summary LLM.
             summary_llm_model: Model name sent to summary LLM endpoint.
             summary_llm_api_key: API key used when summary_llm_auth is not set.
+            summary_llm_max_tokens: Max output tokens for summary model.
+            summary_llm_timeout: Timeout seconds for summary model request.
             max_webpage_tokens: Maximum tokens for webpage content.
         """
         self.jina_api_key = jina_api_key or JINA_API_KEY
@@ -163,7 +170,10 @@ class Visit:
         self.summary_llm_auth = summary_llm_auth or SUMMARY_LLM_AUTH
         self.summary_llm_model = summary_llm_model or SUMMARY_LLM_MODEL
         self.summary_llm_api_key = summary_llm_api_key or SUMMARY_LLM_API_KEY
+        self.summary_llm_max_tokens = summary_llm_max_tokens or SUMMARY_LLM_MAX_TOKENS
+        self.summary_llm_timeout = summary_llm_timeout or SUMMARY_LLM_TIMEOUT
         self.max_webpage_tokens = max_webpage_tokens or MAX_WEBPAGE_TOKENS
+        self.chars_per_token = VISIT_CHARS_PER_TOKEN
         self.tokenizer = _load_tokenizer()
 
     def call(self, params: Union[str, dict], **kwargs) -> Tuple[str, list]:
@@ -254,6 +264,10 @@ class Visit:
                             tokens[:self.max_webpage_tokens],
                             skip_special_tokens=True
                         )
+                else:
+                    max_chars = self.max_webpage_tokens * self.chars_per_token
+                    if len(content) > max_chars:
+                        content = content[:max_chars]
                 
                 # Extract useful information using LLM
                 messages = [{"role": "user", "content": EXTRACTOR_PROMPT.format(
@@ -402,30 +416,43 @@ class Visit:
         elif self.summary_llm_api_key:
             headers['Authorization'] = f"Bearer {self.summary_llm_api_key}"
 
+        if not self.summary_llm_model:
+            print("Summary LLM call failed: SUMMARY_LLM_MODEL is empty.")
+            return None
+
         payload = {
             "model": self.summary_llm_model,
             "messages": messages,
             "temperature": 0.7,
             "top_p": 0.8,
-            "max_tokens": 24000,
+            "max_tokens": self.summary_llm_max_tokens,
         }
-        
+
         for attempt in range(5):
             try:
                 response = requests.post(
                     self.summary_llm_url,
                     headers=headers,
                     json=payload,
-                    timeout=120
+                    timeout=self.summary_llm_timeout
                 )
                 response.raise_for_status()
                 data = response.json()
                 return data['choices'][0]['message']['content']
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+                body = e.response.text[:800] if e.response is not None else ""
+                if status is not None and 400 <= status < 500 and status != 429:
+                    print(f"Summary LLM call failed ({status}): {body}")
+                    return None
+                if attempt == 4:
+                    print(f"Summary LLM call failed ({status}): {body}")
+                time.sleep(2)
             except Exception as e:
                 if attempt == 4:
                     print(f"Summary LLM call failed: {e}")
                 time.sleep(2)
-        
+
         return None
 
 
