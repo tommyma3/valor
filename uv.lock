@@ -3483,6 +3483,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "accelerate" },
+    { name = "datasets" },
     { name = "faiss-cpu" },
     { name = "flash-linear-attention" },
     { name = "huggingface-hub" },
@@ -3509,6 +3510,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", specifier = ">=1.13.0" },
+    { name = "datasets", specifier = ">=3.0.0" },
     { name = "faiss-cpu", specifier = ">=1.8.0" },
     { name = "flash-linear-attention", specifier = ">=0.4.2" },
     { name = "huggingface-hub", extras = ["cli"], specifier = ">=1.7.1" },

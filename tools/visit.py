@@ -423,8 +423,8 @@ class Visit:
         payload = {
             "model": self.summary_llm_model,
             "messages": messages,
-            "temperature": 0.7,
-            "top_p": 0.8,
+            "temperature": 1,
+            "top_p": 0.95,
             "max_tokens": self.summary_llm_max_tokens,
         }
 
