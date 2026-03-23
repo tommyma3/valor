@@ -32,6 +32,10 @@ except ImportError:
     MAX_WEBPAGE_TOKENS = int(os.getenv("MAX_WEBPAGE_TOKENS", "48000"))
     TOKENIZER_PATH = os.getenv("TOKENIZER_PATH", "model/Qwen3.5-35B-A3B")
 
+# Optional summary model/api-key wiring (useful for Moonshot/Kimi endpoints).
+SUMMARY_LLM_MODEL = os.getenv("SUMMARY_LLM_MODEL", os.getenv("MOONSHOT_MODEL", ""))
+SUMMARY_LLM_API_KEY = os.getenv("SUMMARY_LLM_API_KEY", os.getenv("MOONSHOT_API_KEY", ""))
+
 try:
     from .pdf_parser import download_pdf, parse_pdf
 except ImportError:
@@ -137,6 +141,8 @@ class Visit:
         scraper_api_key: Optional[str] = None,
         summary_llm_url: Optional[str] = None,
         summary_llm_auth: Optional[str] = None,
+        summary_llm_model: Optional[str] = None,
+        summary_llm_api_key: Optional[str] = None,
         max_webpage_tokens: int = None
     ):
         """
@@ -147,12 +153,16 @@ class Visit:
             scraper_api_key: API key for ScraperAPI.
             summary_llm_url: URL for the summary LLM.
             summary_llm_auth: Authorization header for summary LLM.
+            summary_llm_model: Model name sent to summary LLM endpoint.
+            summary_llm_api_key: API key used when summary_llm_auth is not set.
             max_webpage_tokens: Maximum tokens for webpage content.
         """
         self.jina_api_key = jina_api_key or JINA_API_KEY
         self.scraper_api_key = scraper_api_key or SCRAPER_API_KEY
         self.summary_llm_url = summary_llm_url or SUMMARY_LLM_URL
         self.summary_llm_auth = summary_llm_auth or SUMMARY_LLM_AUTH
+        self.summary_llm_model = summary_llm_model or SUMMARY_LLM_MODEL
+        self.summary_llm_api_key = summary_llm_api_key or SUMMARY_LLM_API_KEY
         self.max_webpage_tokens = max_webpage_tokens or MAX_WEBPAGE_TOKENS
         self.tokenizer = _load_tokenizer()
 
@@ -389,9 +399,11 @@ class Visit:
         headers = {'Content-Type': 'application/json'}
         if self.summary_llm_auth:
             headers['Authorization'] = self.summary_llm_auth
-        
+        elif self.summary_llm_api_key:
+            headers['Authorization'] = f"Bearer {self.summary_llm_api_key}"
+
         payload = {
-            "model": "",
+            "model": self.summary_llm_model,
             "messages": messages,
             "temperature": 0.7,
             "top_p": 0.8,
