@@ -168,7 +168,7 @@ def build_rollout_command(
     model_path: str,
     output_dir: Path,
     queries_tsv: Path,
-    query_id_file: Path,
+    query_id_file: Path | None,
 ) -> list[str]:
     """Build command for running rollouts."""
     cmd = [
@@ -200,12 +200,13 @@ def build_rollout_command(
         args.agent_prompt_template,
         "--checkpoint-every",
         str(args.checkpoint_every),
-        "--device",
+"--device",
         args.device,
-        "--query-id-file",
-        str(query_id_file),
         "--save-traces",
     ]
+
+    if query_id_file is not None:
+        cmd.extend(["--query-id-file", str(query_id_file)])
 
     if args.sglang_url:
         cmd.extend(["--sglang-url", args.sglang_url])
@@ -493,7 +494,8 @@ def parse_args() -> argparse.Namespace:
     args.browsecomp_root = args.browsecomp_root.expanduser().resolve()
     args.queries_tsv = args.queries_tsv.expanduser().resolve()
     args.answers_jsonl = args.answers_jsonl.expanduser().resolve()
-    args.query_id_file = args.query_id_file.expanduser().resolve()
+    if args.query_id_file:
+        args.query_id_file = args.query_id_file.expanduser().resolve()
     args.output_dir = args.output_dir.expanduser().resolve()
 
     if not args.queries_tsv.is_file():
