@@ -440,7 +440,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--browsecomp-root", type=Path, required=True, help="BrowseComp repository root")
     parser.add_argument("--queries-tsv", type=Path, required=True, help="Queries TSV file")
     parser.add_argument("--answers-jsonl", type=Path, required=True, help="Answers JSONL file")
-    parser.add_argument("--query-id-file", type=Path, required=True, help="File with query IDs to process")
+    parser.add_argument("--query-id-file", type=Path, help="File with query IDs to process (optional, uses all queries if not provided)")
     parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
 
     parser.add_argument("--model-path", required=True, help="Model path for rollouts (SGLang or local)")
@@ -500,7 +500,7 @@ def parse_args() -> argparse.Namespace:
         raise FileNotFoundError(f"Queries TSV not found: {args.queries_tsv}")
     if not args.answers_jsonl.is_file():
         raise FileNotFoundError(f"Answers JSONL not found: {args.answers_jsonl}")
-    if not args.query_id_file.is_file():
+    if args.query_id_file and not args.query_id_file.is_file():
         raise FileNotFoundError(f"Query ID file not found: {args.query_id_file}")
 
     return args
@@ -524,9 +524,13 @@ def main() -> None:
     if not qa_pairs:
         raise ValueError("No QA pairs loaded")
 
-    query_ids = [qid for qid in load_query_ids(args.query_id_file) if qid in qa_pairs]
-    if not query_ids:
-        raise ValueError("No valid query IDs found")
+    if args.query_id_file:
+        query_ids = [qid for qid in load_query_ids(args.query_id_file) if qid in qa_pairs]
+        if not query_ids:
+            raise ValueError("No valid query IDs found")
+    else:
+        query_ids = list(qa_pairs.keys())
+        logger.info(f"No query ID file provided, using all {len(query_ids)} queries from dataset")
 
     queries_tsv = args.output_dir / "queries.tsv"
     write_queries_tsv(queries_tsv, query_ids, {qid: qa.query for qid, qa in qa_pairs.items()})
