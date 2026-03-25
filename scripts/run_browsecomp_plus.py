@@ -69,13 +69,35 @@ def _extract_tag(text: str, tag: str) -> str:
     return match.group(1).strip()
 
 
+def _filter_thinking_sections(text: str) -> str:
+    """Remove thinking sections from the text.
+
+    Handles:
+    1. Text between <think> and </think>
+    2. Text before </think> if <think> is missing
+    """
+    # Remove content between <think> and </think>
+    think_pattern = r"<think>.*?</think>"
+    filtered = re.sub(think_pattern, "", text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove text before </think> if <think> is missing
+    think_end_pattern = r"^.*?</think>"
+    filtered = re.sub(think_end_pattern, "", filtered, flags=re.DOTALL | re.IGNORECASE)
+
+    return filtered.strip()
+
+
 def _extract_sections_strict(text: str) -> tuple[str, str, str]:
     """Parse exactly two top-level blocks: <report> + one of <answer>/<tool_call>."""
+    # First filter out thinking sections
+    filtered_text = _filter_thinking_sections(text)
+
+    # Then parse the remaining text
     pattern = (
         r"^\s*<report>(?P<report>.*?)</report>\s*"
         r"(?:<answer>(?P<answer>.*?)</answer>|<tool_call>(?P<tool_call>.*?)</tool_call>)\s*$"
     )
-    match = re.search(pattern, text, flags=re.DOTALL | re.IGNORECASE)
+    match = re.search(pattern, filtered_text, flags=re.DOTALL | re.IGNORECASE)
     if not match:
         return "", "", ""
     report = (match.group("report") or "").strip()
@@ -91,18 +113,21 @@ def _extract_sections_relaxed(text: str) -> tuple[str, str, str]:
     It intentionally avoids a single anchored regex that can bind an early
     `<answer>` example and consume until the final `</answer>`.
     """
+    # First filter out thinking sections
+    filtered_text = _filter_thinking_sections(text)
+
     pair_pattern = re.compile(
         r"<report>(?P<report>.*?)</report>\s*"
         r"<(?P<kind>answer|tool_call)>(?P<body>.*?)</(?P=kind)>",
         flags=re.DOTALL | re.IGNORECASE,
     )
-    matches = list(pair_pattern.finditer(text))
+    matches = list(pair_pattern.finditer(filtered_text))
     if not matches:
         return "", "", ""
 
     # Prefer a pair that reaches the end (ignoring whitespace). Otherwise fall
     # back to the last complete pair in the text.
-    terminal_matches = [m for m in matches if not text[m.end() :].strip()]
+    terminal_matches = [m for m in matches if not filtered_text[m.end() :].strip()]
     match = terminal_matches[-1] if terminal_matches else matches[-1]
 
     report = (match.group("report") or "").strip()
@@ -985,6 +1010,14 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                 if not format_error:
                     break
 
+            trace_item = {
+                "step": step_idx,
+                "completion": completion,
+                "report": report_text,
+                "answer": answer_text,
+                "tool_call": tool_call_text,
+            }
+
             if report_text:
                 result_items.append(
                     {
@@ -996,32 +1029,25 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                 )
                 last_report = report_text
 
-            trace_item = {
-                "step": step_idx,
-                "completion": completion,
-                "report": report_text,
-                "answer": answer_text,
-                "tool_call": tool_call_text,
-            }
-
             if format_error:
-                # Recovery path: convert malformed generation into a safe fallback search
-                # so the trajectory can still progress instead of looping on format errors.
-                fallback_payload = {
-                    "tool": "search",
-                    "parameters": {"query": _fallback_search_query(agent_question)},
+                # Recovery path: keep the old report and set tool_call to "Invalid tool call."
+                # with empty tool_output so the trajectory can still progress.
+                error_payload = {
+                    "tool": "error",
+                    "parameters": {"message": "Invalid tool call."}
                 }
-                tool_call_text = json.dumps(fallback_payload, ensure_ascii=False)
-                if not report_text:
-                    report_text = "Format recovery: issuing fallback search query."
-                    trace_item["report"] = report_text
-                    last_report = report_text
+                tool_call_text = json.dumps(error_payload, ensure_ascii=False)
+                # Keep the old report unchanged
+                if not last_report:
+                    # If this is step 1 and there's no previous report, create a basic one
+                    last_report = "Starting analysis."
+                    trace_item["report"] = last_report
                     result_items.append(
                         {
                             "type": "reasoning",
                             "tool_name": None,
                             "arguments": None,
-                            "output": report_text,
+                            "output": last_report,
                         }
                     )
                 trace_item["tool_call"] = tool_call_text
@@ -1048,6 +1074,23 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                 last_action = ""
                 last_observation = "[Tool Error] Missing <tool_call> tag."
                 trace_item["tool_error"] = last_observation
+                steps.append(trace_item)
+                continue
+
+            # Check if this is an "Invalid tool call." from format error recovery
+            if tool_call_text == '{"tool": "error", "parameters": {"message": "Invalid tool call."}}':
+                # Handle invalid tool call from format error
+                last_action = tool_call_text
+                last_observation = ""  # Empty tool_output as specified
+                trace_item["tool_error"] = "Invalid tool call from format error recovery"
+                result_items.append(
+                    {
+                        "type": "tool_call",
+                        "tool_name": "error",
+                        "arguments": {"message": "Invalid tool call."},
+                        "output": "",
+                    }
+                )
                 steps.append(trace_item)
                 continue
 

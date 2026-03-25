@@ -211,6 +211,8 @@ def build_rollout_command(
 
     if query_id_file is not None:
         cmd.extend(["--query-id-file", str(query_id_file)])
+    if args.max_queries is not None:
+        cmd.extend(["--max-queries", str(args.max_queries)])
 
     if args.sglang_url:
         cmd.extend(["--sglang-url", args.sglang_url])
@@ -500,6 +502,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--checkpoint-every", type=int, default=50)
+    parser.add_argument("--max-queries", type=int, default=None, help="Maximum number of queries to process (optional)")
 
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--device-map", default=None)
@@ -562,6 +565,12 @@ def main() -> None:
     else:
         query_ids = list(qa_pairs.keys())
         logger.info(f"No query ID file provided, using all {len(query_ids)} queries from dataset")
+
+    # Limit number of queries if max_queries is specified
+    if args.max_queries is not None:
+        original_count = len(query_ids)
+        query_ids = query_ids[:args.max_queries]
+        logger.info(f"Limited queries from {original_count} to {len(query_ids)} (max_queries={args.max_queries})")
 
     queries_tsv = args.output_dir / "queries.tsv"
     write_queries_tsv(queries_tsv, query_ids, {qid: qa.query for qid, qa in qa_pairs.items()})
