@@ -69,6 +69,60 @@ def _extract_tag(text: str, tag: str) -> str:
     return match.group(1).strip()
 
 
+def _extract_sections_strict(text: str) -> tuple[str, str, str]:
+    """Parse exactly two top-level blocks: <report> + one of <answer>/<tool_call>."""
+    pattern = (
+        r"^\s*<report>(?P<report>.*?)</report>\s*"
+        r"(?:<answer>(?P<answer>.*?)</answer>|<tool_call>(?P<tool_call>.*?)</tool_call>)\s*$"
+    )
+    match = re.search(pattern, text, flags=re.DOTALL | re.IGNORECASE)
+    if not match:
+        return "", "", ""
+    report = (match.group("report") or "").strip()
+    answer = (match.group("answer") or "").strip()
+    tool_call = (match.group("tool_call") or "").strip()
+    return report, answer, tool_call
+
+
+def _extract_sections_relaxed(text: str) -> tuple[str, str, str]:
+    """Extract the last contiguous <report> + (<answer>|<tool_call>) pair.
+
+    This path is for noisy completions (e.g., chain-of-thought text before tags).
+    It intentionally avoids a single anchored regex that can bind an early
+    `<answer>` example and consume until the final `</answer>`.
+    """
+    pair_pattern = re.compile(
+        r"<report>(?P<report>.*?)</report>\s*"
+        r"<(?P<kind>answer|tool_call)>(?P<body>.*?)</(?P=kind)>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    matches = list(pair_pattern.finditer(text))
+    if not matches:
+        return "", "", ""
+
+    # Prefer a pair that reaches the end (ignoring whitespace). Otherwise fall
+    # back to the last complete pair in the text.
+    terminal_matches = [m for m in matches if not text[m.end() :].strip()]
+    match = terminal_matches[-1] if terminal_matches else matches[-1]
+
+    report = (match.group("report") or "").strip()
+    kind = str(match.group("kind") or "").strip().lower()
+    body = (match.group("body") or "").strip()
+
+    if kind == "answer":
+        return report, body, ""
+    if kind == "tool_call":
+        return report, "", body
+    return "", "", ""
+
+def _extract_sections(text: str) -> tuple[str, str, str]:
+    """Prefer strict parse; fall back to relaxed tail parse for noisy completions."""
+    report, answer, tool_call = _extract_sections_strict(text)
+    if report or answer or tool_call:
+        return report, answer, tool_call
+    return _extract_sections_relaxed(text)
+
+
 def _safe_json_loads(text: str) -> dict[str, Any] | None:
     try:
         parsed = json.loads(text)
@@ -109,6 +163,68 @@ def _normalize_tool_call(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         raise ValueError("Tool parameters must be a JSON object.")
 
     return str(tool_name), params
+
+
+def _step_format_error(step_idx: int, answer_text: str, tool_call_text: str) -> str:
+    has_answer = bool(answer_text.strip())
+    has_tool = bool(tool_call_text.strip())
+
+    if step_idx == 1:
+        if has_answer:
+            return "Initial step must not include <answer>; it must output <tool_call> only."
+        if not has_tool:
+            return "Initial step is missing <tool_call>."
+    else:
+        if has_answer == has_tool:
+            return "Each non-initial step must include exactly one of <answer> or <tool_call>."
+
+    if has_answer:
+        lowered = answer_text.lower()
+        if any(tag in lowered for tag in ("<report>", "</report>", "<tool_call>", "</tool_call>", "<answer>", "</answer>")):
+            return "<answer> must not contain nested tag blocks."
+
+    if has_tool and _safe_json_loads(tool_call_text) is None:
+        return "<tool_call> must contain a single valid JSON object."
+
+    return ""
+
+def _format_retry_suffix(error: str) -> str:
+    return (
+        "\n\nFORMAT CORRECTION (highest priority): "
+        f"{error}\n"
+        "Regenerate now.\n"
+        "Return only the required XML-like blocks.\n"
+        "Do not output 'Thinking Process' or any text outside tags.\n"
+        "If uncertain, output <tool_call> with valid JSON."
+    )
+
+
+def _fallback_search_query(question: str) -> str:
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9'_-]{2,}", question)
+    if not tokens:
+        return question.strip()[:220]
+
+    stop = {
+        "the", "and", "for", "with", "from", "that", "this", "were", "was",
+        "into", "what", "which", "where", "when", "book", "author", "award",
+        "city", "born", "first", "second", "later", "above", "same", "over",
+        "more", "than", "year", "years", "2010s", "2000s",
+    }
+
+    picked: list[str] = []
+    seen: set[str] = set()
+    for t in tokens:
+        tl = t.lower()
+        if tl in stop or tl in seen:
+            continue
+        seen.add(tl)
+        picked.append(t)
+        if len(picked) >= 12:
+            break
+
+    if not picked:
+        picked = tokens[:12]
+    return " ".join(picked)[:220]
 
 
 def _resolve_dtype(dtype: str | None, device: str) -> torch.dtype | None:
@@ -551,6 +667,12 @@ def _build_arg_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--max-steps", type=int, default=24)
+    parser.add_argument(
+        "--format-retries",
+        type=int,
+        default=1,
+        help="Retry generation this many times when output format/tool_call JSON is invalid.",
+    )
     parser.add_argument("--date", default=None, help="Date injected into prompt (YYYY-MM-DD).")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -794,6 +916,9 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
         )
         tools_prompt = runtime.build_tools_prompt()
         formatted_query = format_query(raw_query, args.query_template)
+        # For VALOR prompts, use raw question text to avoid nested prompt instructions
+        # embedded by BrowseComp query templates.
+        agent_question = raw_query if args.agent_prompt_template == "browsecomp" else formatted_query
         query_date = args.date or datetime.now().date().isoformat()
 
         logger.info("Query %s | start", query_id)
@@ -806,47 +931,59 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
 
         for step_idx in range(1, args.max_steps + 1):
             if step_idx == 1:
-                prompt = initial_prompt_template.format(
+                base_prompt = initial_prompt_template.format(
                     date_to_use=query_date,
-                    question=formatted_query,
+                    question=agent_question,
                     tools=tools_prompt,
                 )
             else:
-                prompt = instruction_prompt_template.format(
+                base_prompt = instruction_prompt_template.format(
                     date_to_use=query_date,
-                    question=formatted_query,
+                    question=agent_question,
                     tools=tools_prompt,
                     report=last_report,
                     action=last_action,
                     observation=last_observation,
                 )
 
-            if use_sglang:
-                completion = _sglang_chat(
-                    args.sglang_url,
-                    sglang_model_name,
-                    prompt,
-                    temperature=args.temperature,
-                    top_p=args.top_p,
-                    max_new_tokens=args.max_new_tokens,
-                    api_key=args.sglang_api_key,
-                    timeout=args.sglang_timeout,
+            completion = ""
+            report_text = ""
+            answer_text = ""
+            tool_call_text = ""
+            format_error = ""
+            for attempt in range(max(0, int(args.format_retries)) + 1):
+                prompt = (
+                    base_prompt
+                    if attempt == 0
+                    else base_prompt + _format_retry_suffix(format_error)
                 )
-            else:
-                assert model is not None and tokenizer is not None and device is not None
-                completion = _generate_completion(
-                    model,
-                    tokenizer,
-                    prompt,
-                    device=device,
-                    max_new_tokens=args.max_new_tokens,
-                    temperature=args.temperature,
-                    top_p=args.top_p,
-                )
+                if use_sglang:
+                    completion = _sglang_chat(
+                        args.sglang_url,
+                        sglang_model_name,
+                        prompt,
+                        temperature=args.temperature,
+                        top_p=args.top_p,
+                        max_new_tokens=args.max_new_tokens,
+                        api_key=args.sglang_api_key,
+                        timeout=args.sglang_timeout,
+                    )
+                else:
+                    assert model is not None and tokenizer is not None and device is not None
+                    completion = _generate_completion(
+                        model,
+                        tokenizer,
+                        prompt,
+                        device=device,
+                        max_new_tokens=args.max_new_tokens,
+                        temperature=args.temperature,
+                        top_p=args.top_p,
+                    )
 
-            report_text = _extract_tag(completion, "report")
-            answer_text = _extract_tag(completion, "answer")
-            tool_call_text = _extract_tag(completion, "tool_call")
+                report_text, answer_text, tool_call_text = _extract_sections(completion)
+                format_error = _step_format_error(step_idx, answer_text, tool_call_text)
+                if not format_error:
+                    break
 
             if report_text:
                 result_items.append(
@@ -866,6 +1003,33 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                 "answer": answer_text,
                 "tool_call": tool_call_text,
             }
+
+            if format_error:
+                # Recovery path: convert malformed generation into a safe fallback search
+                # so the trajectory can still progress instead of looping on format errors.
+                fallback_payload = {
+                    "tool": "search",
+                    "parameters": {"query": _fallback_search_query(agent_question)},
+                }
+                tool_call_text = json.dumps(fallback_payload, ensure_ascii=False)
+                if not report_text:
+                    report_text = "Format recovery: issuing fallback search query."
+                    trace_item["report"] = report_text
+                    last_report = report_text
+                    result_items.append(
+                        {
+                            "type": "reasoning",
+                            "tool_name": None,
+                            "arguments": None,
+                            "output": report_text,
+                        }
+                    )
+                trace_item["tool_call"] = tool_call_text
+                trace_item["format_error"] = format_error
+                trace_item["format_recovered"] = True
+                # Never treat malformed generations as final answers.
+                answer_text = ""
+                trace_item["answer"] = ""
 
             if answer_text:
                 result_items.append(
@@ -946,6 +1110,7 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                 "max_steps": args.max_steps,
                 "max_new_tokens": args.max_new_tokens,
                 "agent_prompt_template": args.agent_prompt_template,
+                "parser_mode": "strict_v2",
                 "generation_backend": "sglang" if use_sglang else "local",
                 "generation_model": sglang_model_name if use_sglang else args.model_path,
             },
@@ -967,6 +1132,8 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                     "query_id": query_id,
                     "query": raw_query,
                     "formatted_query": formatted_query,
+                    "agent_question": agent_question,
+                    "parser_mode": "strict_v2",
                     "steps": steps,
                     "status": status,
                 },
@@ -1013,3 +1180,6 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+
+
+

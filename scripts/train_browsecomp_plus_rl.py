@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import csv
@@ -281,6 +281,8 @@ def build_rollout_command(
         args.index_path,
         "--max-steps",
         str(args.rollout_max_steps),
+        "--format-retries",
+        str(args.rollout_format_retries),
         "--max-new-tokens",
         str(args.rollout_max_new_tokens),
         "--temperature",
@@ -332,6 +334,8 @@ def build_rollout_command(
         if not args.retriever_model_name:
             raise ValueError("--retriever-model-name is required for faiss/reasonir searcher.")
         cmd.extend(["--model-name", args.retriever_model_name])
+        if args.searcher_attn_implementation != "auto":
+            cmd.extend(["--attn-implementation", args.searcher_attn_implementation])
         if args.normalize:
             cmd.append("--normalize")
         if args.pooling is not None:
@@ -631,6 +635,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--searcher-type", choices=["bm25", "faiss", "reasonir", "custom"], required=True)
     parser.add_argument("--index-path", required=True)
     parser.add_argument("--retriever-model-name", default=None)
+    parser.add_argument(
+        "--searcher-attn-implementation",
+        choices=["auto", "eager", "sdpa", "flash_attention_2"],
+        default="auto",
+        help="Attention backend for FAISS/ReasonIR retriever loading.",
+    )
     parser.add_argument("--normalize", action="store_true")
     parser.add_argument("--pooling", default="eos")
     parser.add_argument("--searcher-torch-dtype", choices=["float16", "bfloat16", "float32"], default="float16")
@@ -662,6 +672,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--rollout-max-steps", type=int, default=24)
+    parser.add_argument("--rollout-format-retries", type=int, default=1)
     parser.add_argument("--rollout-max-new-tokens", type=int, default=768)
     parser.add_argument("--rollout-temperature", type=float, default=0.0)
     parser.add_argument("--rollout-top-p", type=float, default=0.9)

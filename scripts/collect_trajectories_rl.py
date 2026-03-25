@@ -17,10 +17,12 @@ from valor.rl_utils import (
     configure_logger,
     extract_final_answer,
     load_json,
+    load_query_ids,
     normalize_text,
     read_jsonl,
     safe_query_id,
     save_json,
+    utc_now_iso,
     write_jsonl,
     write_query_ids,
     write_queries_tsv,
@@ -188,6 +190,8 @@ def build_rollout_command(
         str(args.index_path),
         "--max-steps",
         str(args.max_steps),
+        "--format-retries",
+        str(args.format_retries),
         "--max-new-tokens",
         str(args.max_new_tokens),
         "--temperature",
@@ -241,6 +245,12 @@ def build_rollout_command(
         if not args.retriever_model_name:
             raise ValueError("--retriever-model-name is required for faiss/reasonir searcher.")
         cmd.extend(["--model-name", args.retriever_model_name])
+        if args.searcher_attn_implementation != "auto":
+            cmd.extend(["--attn-implementation", args.searcher_attn_implementation])
+        if args.searcher_device != "auto":
+            cmd.extend(["--searcher-device", args.searcher_device])
+        if args.searcher_cuda_device != 0:
+            cmd.extend(["--searcher-cuda-device", str(args.searcher_cuda_device)])
         if args.normalize:
             cmd.append("--normalize")
         if args.pooling is not None:
@@ -448,6 +458,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--searcher-type", choices=["bm25", "faiss", "reasonir", "custom"], required=True)
     parser.add_argument("--index-path", required=True, help="Path to search index")
     parser.add_argument("--retriever-model-name", default=None, help="Retriever model name for faiss/reasonir")
+    parser.add_argument(
+        "--searcher-attn-implementation",
+        choices=["auto", "eager", "sdpa", "flash_attention_2"],
+        default="auto",
+        help="Attention backend for FAISS/ReasonIR retriever loading.",
+    )
+    parser.add_argument(
+        "--searcher-device",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="Device for FAISS/ReasonIR retriever encoder.",
+    )
+    parser.add_argument(
+        "--searcher-cuda-device",
+        type=int,
+        default=0,
+        help="CUDA device index for retriever when --searcher-device uses CUDA.",
+    )
     parser.add_argument("--normalize", action="store_true")
     parser.add_argument("--pooling", default="eos")
     parser.add_argument("--searcher-torch-dtype", choices=["float16", "bfloat16", "float32"], default="float16")
@@ -467,6 +495,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent-prompt-template", choices=["browsecomp", "default"], default="browsecomp")
 
     parser.add_argument("--max-steps", type=int, default=24, help="Max steps per trajectory")
+    parser.add_argument("--format-retries", type=int, default=1, help="Retries for invalid step format")
     parser.add_argument("--max-new-tokens", type=int, default=768)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=0.9)
