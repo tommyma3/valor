@@ -1,4 +1,5 @@
 ﻿import argparse
+import importlib.util
 from pathlib import Path
 
 import torch
@@ -10,6 +11,12 @@ from valor.data import PolicyDataset, collate_policy
 from valor.io_utils import read_jsonl
 from valor.model import PolicyModel
 from valor.utils import set_seed
+
+try:
+    import deepspeed
+    DEEPSPEED_AVAILABLE = True
+except ImportError:
+    DEEPSPEED_AVAILABLE = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1,
                        help="Number of steps to accumulate gradients (simulate larger batch size)")
+    parser.add_argument("--deepspeed", type=str, default=None,
+                       help="Path to DeepSpeed config file (enables DeepSpeed training)")
     return parser.parse_args()
 
 
@@ -60,18 +69,43 @@ def main() -> None:
     # Enable gradient checkpointing to save memory
     model.backbone.gradient_checkpointing_enable()
 
-    if args.device_map is None:
+    optimizer = torch.optim.AdamW(
+        (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False, eps=1e-7
+    )
+
+    # Initialize DeepSpeed if config provided
+    use_deepspeed = False
+    if args.deepspeed is not None:
+        if not DEEPSPEED_AVAILABLE:
+            print("WARNING: DeepSpeed requested but not installed. Install with: pip install deepspeed")
+            print("Continuing without DeepSpeed...")
+        else:
+            print(f"Initializing DeepSpeed with config: {args.deepspeed}")
+            model, optimizer, _, _ = deepspeed.initialize(
+                model=model,
+                model_parameters=[p for p in model.parameters() if p.requires_grad],
+                config=args.deepspeed,
+                optimizer=optimizer,
+                mpu=None,
+                dist_init_required=False,
+            )
+            use_deepspeed = True
+    elif args.device_map is None:
+        # Without DeepSpeed, move model to device
         device = torch.device(args.device if torch.cuda.is_available() else "cpu")
         model.to(device)
     else:
         device = None
 
-    optimizer = torch.optim.AdamW(
-        (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False, eps=1e-7
-    )
-
     # Gradient scaler not needed for bfloat16 (has same dynamic range as float32)
-    # scaler = torch.cuda.amp.GradScaler(enabled=(torch_dtype == torch.bfloat16))
+
+    # Handle device placement based on training method
+    if not use_deepspeed:
+        if args.device_map is None:
+            device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+            model.to(device)
+        else:
+            device = None
 
     model.train()
     for epoch in range(args.epochs):
@@ -118,7 +152,8 @@ def main() -> None:
                     print(f"    ERROR: All labels are -100! This will cause NaN loss.")
                     continue
 
-            if device is not None:
+            # Move to device if not using DeepSpeed
+            if not use_deepspeed and device is not None:
                 base_batch = {k: v.to(device) for k, v in base_batch.items()}
 
             outputs = model(
@@ -170,40 +205,44 @@ def main() -> None:
                 else:
                     loss = loss + args.alpha * indicator_loss
 
-            # Scale loss for gradient accumulation
-            loss = loss / args.gradient_accumulation_steps
+            if use_deepspeed:
+                # DeepSpeed handles gradient accumulation and optimizer internally
+                model.backward(loss)
+                model.step()
+                progress.set_postfix(loss=loss.item())
+            else:
+                # Manual gradient accumulation
+                loss = loss / args.gradient_accumulation_steps
+                loss.backward()
 
-            # Backward pass (no scaling needed for bfloat16)
-            loss.backward()
+                accumulated_loss += loss.item()
+                accumulated_batches += 1
 
-            accumulated_loss += loss.item()
-            accumulated_batches += 1
+                # Only update weights every gradient_accumulation_steps
+                if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
+                    # Check for NaN in gradients
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    if torch.isnan(grad_norm):
+                        print(f"WARNING: NaN gradients at step, skipping optimizer step")
+                        optimizer.zero_grad()
+                        accumulated_loss = 0.0
+                        accumulated_batches = 0
+                        continue
 
-            # Only update weights every gradient_accumulation_steps
-            if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
-                # Check for NaN in gradients
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                if torch.isnan(grad_norm):
-                    print(f"WARNING: NaN gradients at step, skipping optimizer step")
+                    # Optimizer step
+                    optimizer.step()
                     optimizer.zero_grad()
+
+                    # Update progress with average loss over accumulated steps
+                    avg_loss = accumulated_loss / accumulated_batches if accumulated_batches > 0 else 0.0
+                    progress.set_postfix(loss=avg_loss)
+
+                    # Reset for next accumulation
                     accumulated_loss = 0.0
                     accumulated_batches = 0
-                    continue
 
-                # Optimizer step (no scaler for bfloat16)
-                optimizer.step()
-                optimizer.zero_grad()
-
-                # Update progress with average loss over accumulated steps
-                avg_loss = accumulated_loss / accumulated_batches if accumulated_batches > 0 else 0.0
-                progress.set_postfix(loss=avg_loss)
-
-                # Reset for next accumulation
-                accumulated_loss = 0.0
-                accumulated_batches = 0
-
-        # Handle any remaining accumulated gradients at end of epoch
-        if accumulated_batches > 0:
+        # Handle any remaining accumulated gradients at end of epoch (non-DeepSpeed only)
+        if not use_deepspeed and accumulated_batches > 0:
             print(f"Processing final {accumulated_batches} accumulated batches")
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             if not torch.isnan(grad_norm):
@@ -212,7 +251,13 @@ def main() -> None:
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
-    model.save(str(output_dir))
+
+    # Save model differently based on training method
+    if use_deepspeed:
+        model.save_checkpoint(str(output_dir))
+    else:
+        model.save(str(output_dir))
+
     tokenizer.save_pretrained(str(output_dir))
 
 
