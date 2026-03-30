@@ -157,8 +157,22 @@ def collate_policy(
 
     labels = enc.input_ids.clone()
     prompt_lens = prompt_enc.attention_mask.sum(dim=1)
+
+    valid_batches = []
     for i, length in enumerate(prompt_lens.tolist()):
-        labels[i, :length] = -100
+        if length < max_length:
+            labels[i, :length] = -100
+            valid_batches.append(i)
+        else:
+            print(f"WARNING: Example {i} has prompt length {length} >= max_length {max_length}, max_length may be too small")
+            # Keep the example but mask everything (will be skipped by loss check)
+            labels[i, :] = -100
+
+    return {
+        "input_ids": enc.input_ids,
+        "attention_mask": enc.attention_mask,
+        "labels": labels,
+    }
 
     return {
         "input_ids": enc.input_ids,
