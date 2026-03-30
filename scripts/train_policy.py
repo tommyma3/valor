@@ -44,6 +44,7 @@ def main() -> None:
         dataset,
         batch_size=args.batch_size,
         shuffle=True,
+        collate_fn=lambda batch: batch,  # Return list as-is, collate manually in training loop
     )
 
     torch_dtype = torch.bfloat16 if args.device == "cuda" else None
@@ -54,6 +55,9 @@ def main() -> None:
         trust_remote_code=True,
     )
 
+    # Enable gradient checkpointing to save memory
+    model.backbone.gradient_checkpointing_enable()
+
     if args.device_map is None:
         device = torch.device(args.device if torch.cuda.is_available() else "cpu")
         model.to(device)
@@ -61,7 +65,7 @@ def main() -> None:
         device = None
 
     optimizer = torch.optim.AdamW(
-        (p for p in model.parameters() if p.requires_grad), lr=args.lr
+        (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False
     )
 
     model.train()
@@ -105,6 +109,7 @@ def main() -> None:
 
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             progress.set_postfix(loss=loss.item())
 

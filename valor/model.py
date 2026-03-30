@@ -134,6 +134,9 @@ class ValueModel(nn.Module):
         )
         hidden_size = _resolve_hidden_size(self.backbone.config)
         self.value_head = nn.Linear(hidden_size, 2)
+        # Ensure value_head uses the same dtype as backbone
+        if torch_dtype is not None:
+            self.value_head = self.value_head.to(dtype=torch_dtype)
 
     def forward(
         self,
