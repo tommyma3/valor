@@ -7,7 +7,7 @@ import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import ModuleWrapPolicy
-from torch.distributed.fsdp.api import MixedPrecision, CPUOffload, ShardingStrategy
+from torch.distributed.fsdp.api import MixedPrecision, ShardingStrategy
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from transformers import AutoTokenizer
@@ -109,10 +109,15 @@ def main() -> None:
     # Enable gradient checkpointing before FSDP wrapping
     model.backbone.gradient_checkpointing_enable()
 
-    # Set device for FSDP
+    # Set device
     device = torch.device(f"cuda:{local_rank}")
 
-    # Wrap with FSDP - DON'T move to GPU first, FSDP handles this with CPU offload
+    # Move model to GPU - FSDP will shard across GPUs
+    if world_size > 1:
+        print(f"Rank {rank}: Moving model to GPU...")
+    model = model.to(device)
+
+    # Wrap with FSDP for distributed training
     if world_size > 1:
         if is_main_process:
             print("Wrapping model with FSDP...")
@@ -162,7 +167,6 @@ def main() -> None:
             auto_wrap_policy=auto_wrap_policy,
             mixed_precision=mp_policy,
             sharding_strategy=ShardingStrategy.FULL_SHARD,  # ZeRO-3 equivalent
-            cpu_offload=CPUOffload(offload_params=True),  # Offload to CPU
             device_id=device,
             limit_all_gathers=True,
         )
