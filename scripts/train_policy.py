@@ -6,6 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from tqdm import tqdm
+from accelerate import init_empty_weights
 
 from valor.data import PolicyDataset, collate_policy
 from valor.io_utils import read_jsonl
@@ -61,40 +62,55 @@ def main() -> None:
     )
 
     torch_dtype = torch.bfloat16 if args.device == "cuda" else None
-    model = PolicyModel(
-        args.backbone,
-        torch_dtype=torch_dtype,
-        device_map=args.device_map,
-        trust_remote_code=True,
-    )
+
+    # Use init_empty_weights for DeepSpeed to avoid loading full model before partitioning
+    # This prevents OOM when using ZeRO-3 on large models
+    use_deepspeed = args.deepspeed is not None and DEEPSPEED_AVAILABLE
+    if use_deepspeed:
+        print("Using init_empty_weights for DeepSpeed ZeRO-3 training...")
+        with init_empty_weights():
+            model = PolicyModel(
+                args.backbone,
+                torch_dtype=torch_dtype,
+                device_map=None,  # DeepSpeed handles device mapping
+                trust_remote_code=True,
+            )
+    else:
+        model = PolicyModel(
+            args.backbone,
+            torch_dtype=torch_dtype,
+            device_map=args.device_map,
+            trust_remote_code=True,
+        )
 
     # Initialize DeepSpeed if config provided
-    # Note: Gradient checkpointing disabled when using DeepSpeed ZeRO-3 + offload
-    # to avoid conflicts with parameter offloading
-    use_deepspeed = False
     device = None
-    if args.deepspeed is not None:
-        if not DEEPSPEED_AVAILABLE:
-            print("WARNING: DeepSpeed requested but not installed. Install with: pip install deepspeed")
-            print("Continuing without DeepSpeed...")
-            optimizer = torch.optim.AdamW(
-                (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False, eps=1e-7
-            )
-            device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-            if args.device_map is None:
-                model.to(device)
-        else:
-            print(f"Initializing DeepSpeed with config: {args.deepspeed}")
-            model, optimizer, _, _ = deepspeed.initialize(
-                model=model,
-                model_parameters=[p for p in model.parameters() if p.requires_grad],
-                config=args.deepspeed,
-                optimizer=None,
-                mpu=None,
-                dist_init_required=True,
-            )
-            use_deepspeed = True
-            # DeepSpeed handles all device placement, don't manually move tensors
+    if use_deepspeed:
+        print(f"Initializing DeepSpeed with config: {args.deepspeed}")
+        model, optimizer, _, _ = deepspeed.initialize(
+            model=model,
+            model_parameters=[p for p in model.parameters() if p.requires_grad],
+            config=args.deepspeed,
+            optimizer=None,
+            mpu=None,
+            dist_init_required=True,
+        )
+        # DeepSpeed handles all device placement, don't manually move tensors
+        # Enable gradient checkpointing for DeepSpeed training (crucial for 35B models)
+        if hasattr(model.module, 'backbone'):
+            model.module.backbone.gradient_checkpointing_enable()
+        elif hasattr(model, 'backbone'):
+            model.backbone.gradient_checkpointing_enable()
+    elif args.deepspeed is not None and not DEEPSPEED_AVAILABLE:
+        print("WARNING: DeepSpeed requested but not installed. Install with: pip install deepspeed")
+        print("Continuing without DeepSpeed...")
+        optimizer = torch.optim.AdamW(
+            (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False, eps=1e-7
+        )
+        device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+        if args.device_map is None:
+            model.to(device)
+        model.backbone.gradient_checkpointing_enable()
     else:
         optimizer = torch.optim.AdamW(
             (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False, eps=1e-7
@@ -184,10 +200,7 @@ def main() -> None:
                     include_advantage=True,
                     indicator_drop_prob=args.indicator_drop_prob,
                 )
-                if device is not None:
-                    indicator_batch = {k: v.to(device) for k, v in indicator_batch.items()}
-
-                # Move to device if needed
+                # Move to device if needed (non-DeepSpeed only; DeepSpeed handles placement)
                 if device is not None:
                     indicator_batch = {k: v.to(device) for k, v in indicator_batch.items()}
 
