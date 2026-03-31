@@ -89,7 +89,7 @@ def main() -> None:
                 config=args.deepspeed,
                 optimizer=optimizer,
                 mpu=None,
-                dist_init_required=False,
+                dist_init_required=True,
             )
             use_deepspeed = True
     elif args.device_map is None:
