@@ -6,7 +6,6 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from tqdm import tqdm
-from accelerate import init_empty_weights
 
 from valor.data import PolicyDataset, collate_policy
 from valor.io_utils import read_jsonl
@@ -63,18 +62,20 @@ def main() -> None:
 
     torch_dtype = torch.bfloat16 if args.device == "cuda" else None
 
-    # Use init_empty_weights for DeepSpeed to avoid loading full model before partitioning
-    # This prevents OOM when using ZeRO-3 on large models
+    # Determine if using DeepSpeed before loading model
     use_deepspeed = args.deepspeed is not None and DEEPSPEED_AVAILABLE
+
     if use_deepspeed:
-        print("Using init_empty_weights for DeepSpeed ZeRO-3 training...")
-        with init_empty_weights():
-            model = PolicyModel(
-                args.backbone,
-                torch_dtype=torch_dtype,
-                device_map=None,  # DeepSpeed handles device mapping
-                trust_remote_code=True,
-            )
+        # Load model on CPU first, then let DeepSpeed partition to GPUs via ZeRO-3
+        # This avoids loading full model on GPU before partitioning (OOM risk)
+        # while avoiding meta tensor issues with DeepSpeed's .to() calls
+        print("Loading model on CPU for DeepSpeed ZeRO-3 training...")
+        model = PolicyModel(
+            args.backbone,
+            torch_dtype=torch_dtype,
+            device_map=None,  # Load on CPU; DeepSpeed handles device mapping
+            trust_remote_code=True,
+        )
     else:
         model = PolicyModel(
             args.backbone,
