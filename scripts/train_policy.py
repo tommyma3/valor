@@ -109,11 +109,10 @@ def main() -> None:
     # Enable gradient checkpointing before FSDP wrapping
     model.backbone.gradient_checkpointing_enable()
 
-    # Move model to GPU
+    # Set device for FSDP
     device = torch.device(f"cuda:{local_rank}")
-    model = model.to(device)
 
-    # Wrap with FSDP
+    # Wrap with FSDP - DON'T move to GPU first, FSDP handles this with CPU offload
     if world_size > 1:
         if is_main_process:
             print("Wrapping model with FSDP...")
@@ -227,14 +226,11 @@ def main() -> None:
                     print(f"    ERROR: All labels are -100! This will cause NaN loss.")
                     continue
 
-            # Move to device - ensure tensors are on the correct GPU
-            base_batch = {k: v.to(local_rank) for k, v in base_batch.items()}
-
-            # Verify device placement
-            if base_batch["input_ids"].device.type != "cuda":
-                if is_main_process:
-                    print(f"WARNING: input_ids still on {base_batch['input_ids'].device}, forcing to cuda:{local_rank}")
-                base_batch = {k: v.cuda(local_rank) for k, v in base_batch.items()}
+            # With FSDP + CPU offloading, inputs should be on the same device as the model
+            # FSDP handles parameter movement automatically
+            if is_main_process and batch_idx < 3:
+                print(f"  Input device before model: {base_batch['input_ids'].device}")
+                print(f"  Model device: {next(model.parameters()).device}")
 
             outputs = model(
                 input_ids=base_batch["input_ids"],
@@ -261,13 +257,8 @@ def main() -> None:
                     include_advantage=True,
                     indicator_drop_prob=args.indicator_drop_prob,
                 )
-                indicator_batch = {k: v.to(local_rank) for k, v in indicator_batch.items()}
-
-                # Verify device placement
-                if indicator_batch["input_ids"].device.type != "cuda":
-                    if is_main_process:
-                        print(f"WARNING: indicator input_ids still on {indicator_batch['input_ids'].device}, forcing to cuda:{local_rank}")
-                    indicator_batch = {k: v.cuda(local_rank) for k, v in indicator_batch.items()}
+                if is_main_process and batch_idx < 3:
+                    print(f"  Indicator input device: {indicator_batch['input_ids'].device}")
 
                 indicator_outputs = model(
                     input_ids=indicator_batch["input_ids"],
