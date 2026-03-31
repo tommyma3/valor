@@ -6,6 +6,10 @@
   "bf16": {
     "enabled": true
   },
+  "tensor_parallel": {
+    "tp_size": 2,
+    "mpu": null
+  },
   "zero_optimization": {
     "stage": 3,
     "offload_optimizer": {

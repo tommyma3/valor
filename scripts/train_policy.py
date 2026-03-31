@@ -14,6 +14,8 @@ from valor.utils import set_seed
 
 try:
     import deepspeed
+    from deepspeed import comm as dist
+    from deepspeed.utils import groups
     DEEPSPEED_AVAILABLE = True
 except ImportError:
     DEEPSPEED_AVAILABLE = False
@@ -40,6 +42,47 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--local_rank", type=int, default=0,
                        help="Local rank for distributed training (passed by DeepSpeed)")
     return parser.parse_args()
+
+
+def initialize_tensor_parallel_groups(tp_size: int = 2):
+    """Initialize tensor parallel groups for DeepSpeed.
+
+    With TP=2 on 4 GPUs:
+    - GPUs 0,1 form one TP group
+    - GPUs 2,3 form another TP group
+    - Data parallelism is across the TP groups
+    """
+    if not torch.distributed.is_initialized():
+        torch.distributed.init_process_group(backend='nccl')
+
+    world_size = torch.distributed.get_world_size()
+    rank = torch.distributed.get_rank()
+
+    if world_size % tp_size != 0:
+        raise ValueError(f"World size {world_size} must be divisible by TP size {tp_size}")
+
+    # Create tensor parallel groups
+    # TP group 0: ranks 0,1
+    # TP group 1: ranks 2,3
+    num_tp_groups = world_size // tp_size
+
+    for i in range(num_tp_groups):
+        ranks = list(range(i * tp_size, (i + 1) * tp_size))
+        group = torch.distributed.new_group(ranks=ranks)
+        if rank in ranks:
+            tp_group = group
+
+    # Create data parallel groups (one rank from each TP group)
+    # DP group 0: ranks 0,2
+    # DP group 1: ranks 1,3
+    for i in range(tp_size):
+        ranks = list(range(i, world_size, tp_size))
+        group = torch.distributed.new_group(ranks=ranks)
+        if rank in ranks:
+            dp_group = group
+
+    print(f"Rank {rank}: TP size={tp_size}, world_size={world_size}")
+    return tp_group, dp_group
 
 
 def main() -> None:
@@ -87,6 +130,20 @@ def main() -> None:
     # Initialize DeepSpeed if config provided
     device = None
     if use_deepspeed:
+        # Initialize tensor parallel groups before DeepSpeed init
+        # This is required when using tensor_parallel in config
+        print("Initializing tensor parallel groups...")
+        try:
+            # DeepSpeed will read tp_size from config and set up groups internally
+            # We just need to ensure distributed is initialized
+            if not torch.distributed.is_initialized():
+                torch.distributed.init_process_group(backend='nccl')
+                print(f"Initialized NCCL process group, rank={torch.distributed.get_rank()}, world_size={torch.distributed.get_world_size()}")
+            else:
+                print(f"Using existing process group, rank={torch.distributed.get_rank()}, world_size={torch.distributed.get_world_size()}")
+        except Exception as e:
+            print(f"Warning: Could not initialize distributed: {e}")
+
         print(f"Initializing DeepSpeed with config: {args.deepspeed}")
         model, optimizer, _, _ = deepspeed.initialize(
             model=model,
@@ -94,7 +151,7 @@ def main() -> None:
             config=args.deepspeed,
             optimizer=None,
             mpu=None,
-            dist_init_required=True,
+            dist_init_required=False,  # We already initialized above
         )
         # DeepSpeed handles all device placement, don't manually move tensors
         # Enable gradient checkpointing for DeepSpeed training (crucial for 35B models)
