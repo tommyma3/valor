@@ -56,6 +56,20 @@ def _load_backbone(
     offload_state_dict: bool = False,
 ) -> AutoModelForCausalLM:
     config = AutoConfig.from_pretrained(backbone_name, trust_remote_code=trust_remote_code)
+
+    # Handle explicit CPU loading for DeepSpeed compatibility
+    if device_map == "cpu":
+        # For CPU loading, we need to explicitly avoid GPU placement
+        # Use empty device map and force CPU placement
+        return AutoModelForCausalLM.from_pretrained(
+            backbone_name,
+            config=config,
+            torch_dtype=torch_dtype,
+            device_map=None,  # Don't use auto device map
+            trust_remote_code=trust_remote_code,
+            low_cpu_mem_usage=True,
+        ).to("cpu")  # Explicitly move to CPU after loading
+
     return AutoModelForCausalLM.from_pretrained(
         backbone_name,
         config=config,

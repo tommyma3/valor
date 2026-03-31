@@ -73,7 +73,7 @@ def main() -> None:
         model = PolicyModel(
             args.backbone,
             torch_dtype=torch_dtype,
-            device_map=None,  # Load on CPU; DeepSpeed handles device mapping
+            device_map="cpu",  # Force CPU loading; DeepSpeed handles device mapping
             trust_remote_code=True,
         )
     else:
@@ -98,10 +98,13 @@ def main() -> None:
         )
         # DeepSpeed handles all device placement, don't manually move tensors
         # Enable gradient checkpointing for DeepSpeed training (crucial for 35B models)
+        print("Enabling gradient checkpointing for DeepSpeed...")
         if hasattr(model.module, 'backbone'):
             model.module.backbone.gradient_checkpointing_enable()
+            print("Gradient checkpointing enabled on model.module.backbone")
         elif hasattr(model, 'backbone'):
             model.backbone.gradient_checkpointing_enable()
+            print("Gradient checkpointing enabled on model.backbone")
     elif args.deepspeed is not None and not DEEPSPEED_AVAILABLE:
         print("WARNING: DeepSpeed requested but not installed. Install with: pip install deepspeed")
         print("Continuing without DeepSpeed...")
