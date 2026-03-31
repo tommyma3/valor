@@ -227,8 +227,14 @@ def main() -> None:
                     print(f"    ERROR: All labels are -100! This will cause NaN loss.")
                     continue
 
-            # Move to device
-            base_batch = {k: v.to(device) for k, v in base_batch.items()}
+            # Move to device - ensure tensors are on the correct GPU
+            base_batch = {k: v.to(local_rank) for k, v in base_batch.items()}
+
+            # Verify device placement
+            if base_batch["input_ids"].device.type != "cuda":
+                if is_main_process:
+                    print(f"WARNING: input_ids still on {base_batch['input_ids'].device}, forcing to cuda:{local_rank}")
+                base_batch = {k: v.cuda(local_rank) for k, v in base_batch.items()}
 
             outputs = model(
                 input_ids=base_batch["input_ids"],
@@ -255,7 +261,13 @@ def main() -> None:
                     include_advantage=True,
                     indicator_drop_prob=args.indicator_drop_prob,
                 )
-                indicator_batch = {k: v.to(device) for k, v in indicator_batch.items()}
+                indicator_batch = {k: v.to(local_rank) for k, v in indicator_batch.items()}
+
+                # Verify device placement
+                if indicator_batch["input_ids"].device.type != "cuda":
+                    if is_main_process:
+                        print(f"WARNING: indicator input_ids still on {indicator_batch['input_ids'].device}, forcing to cuda:{local_rank}")
+                    indicator_batch = {k: v.cuda(local_rank) for k, v in indicator_batch.items()}
 
                 indicator_outputs = model(
                     input_ids=indicator_batch["input_ids"],
