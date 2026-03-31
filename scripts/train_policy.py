@@ -226,11 +226,11 @@ def main() -> None:
                     print(f"    ERROR: All labels are -100! This will cause NaN loss.")
                     continue
 
-            # With FSDP + CPU offloading, inputs should be on the same device as the model
-            # FSDP handles parameter movement automatically
+            # Move inputs to GPU - FSDP handles parameter movement but not inputs
+            base_batch = {k: v.to(device) for k, v in base_batch.items()}
+
             if is_main_process and batch_idx < 3:
-                print(f"  Input device before model: {base_batch['input_ids'].device}")
-                print(f"  Model device: {next(model.parameters()).device}")
+                print(f"  Input device after to(device): {base_batch['input_ids'].device}")
 
             outputs = model(
                 input_ids=base_batch["input_ids"],
@@ -257,6 +257,9 @@ def main() -> None:
                     include_advantage=True,
                     indicator_drop_prob=args.indicator_drop_prob,
                 )
+                # Move inputs to GPU
+                indicator_batch = {k: v.to(device) for k, v in indicator_batch.items()}
+
                 if is_main_process and batch_idx < 3:
                     print(f"  Indicator input device: {indicator_batch['input_ids'].device}")
 
