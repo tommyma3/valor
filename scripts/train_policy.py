@@ -112,10 +112,10 @@ def main() -> None:
     # Set device
     device = torch.device(f"cuda:{local_rank}")
 
-    # Move model to GPU - FSDP will shard across GPUs
-    if world_size > 1:
-        print(f"Rank {rank}: Moving model to GPU...")
-    model = model.to(device)
+    # Keep model on CPU - FSDP will shard during initialization
+    # This avoids loading full model on GPU before sharding
+    if is_main_process:
+        print("Keeping model on CPU, FSDP will shard to GPUs during init...")
 
     # Wrap with FSDP for distributed training
     if world_size > 1:
