@@ -6,10 +6,6 @@
   "bf16": {
     "enabled": true
   },
-  "tensor_parallel": {
-    "tp_size": 2,
-    "mpu": null
-  },
   "zero_optimization": {
     "stage": 3,
     "offload_optimizer": {
@@ -25,8 +21,8 @@
     "reduce_bucket_size": 5e7,
     "stage3_prefetch_bucket_size": 2e7,
     "stage3_param_persistence_threshold": 5e5,
-    "stage3_max_live_parameters": 2e7,
-    "stage3_max_reuse_distance": 2e7,
+    "stage3_max_live_parameters": 1e7,
+    "stage3_max_reuse_distance": 1e7,
     "stage3_gather_16bit_weights_on_model_save": false,
     "round_robin_gradients": true
   },
