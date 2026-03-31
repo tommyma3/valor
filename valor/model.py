@@ -97,6 +97,14 @@ class PolicyModel(nn.Module):
         attention_mask: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
     ) -> PolicyOutputs:
+        # Ensure tensors are on the same device as the model
+        device = next(self.backbone.parameters()).device
+        if input_ids.device != device:
+            input_ids = input_ids.to(device)
+        if attention_mask.device != device:
+            attention_mask = attention_mask.to(device)
+        if labels is not None and labels.device != device:
+            labels = labels.to(device)
         outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -143,6 +151,12 @@ class ValueModel(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> ValueOutputs:
+        # Ensure tensors are on the same device as the model
+        device = next(self.backbone.parameters()).device
+        if input_ids.device != device:
+            input_ids = input_ids.to(device)
+        if attention_mask.device != device:
+            attention_mask = attention_mask.to(device)
         outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,

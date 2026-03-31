@@ -81,8 +81,8 @@ def main() -> None:
             optimizer = torch.optim.AdamW(
                 (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False, eps=1e-7
             )
+            device = torch.device(args.device if torch.cuda.is_available() else "cpu")
             if args.device_map is None:
-                device = torch.device(args.device if torch.cuda.is_available() else "cpu")
                 model.to(device)
         else:
             print(f"Initializing DeepSpeed with config: {args.deepspeed}")
@@ -100,11 +100,9 @@ def main() -> None:
         optimizer = torch.optim.AdamW(
             (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False, eps=1e-7
         )
+        device = torch.device(args.device if torch.cuda.is_available() else "cpu")
         if args.device_map is None:
-            device = torch.device(args.device if torch.cuda.is_available() else "cpu")
             model.to(device)
-        else:
-            device = None
 
     model.train()
     for epoch in range(args.epochs):

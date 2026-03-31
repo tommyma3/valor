@@ -57,11 +57,9 @@ def main() -> None:
         trust_remote_code=True,
     )
 
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     if args.device_map is None:
-        device = torch.device(args.device if torch.cuda.is_available() else "cpu")
         model.to(device)
-    else:
-        device = None
 
     if args.freeze_backbone:
         for param in model.backbone.parameters():
