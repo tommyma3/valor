@@ -23,12 +23,13 @@
     "round_robin_gradients": true
   },
   "optimizer": {
-    "type": "AdamW",
+    "type": "DeepSpeedCPUAdam",
     "params": {
       "lr": 5e-6,
       "eps": 1e-7,
       "betas": [0.9, 0.999],
-      "foreach": false
+      "amsgrad": false,
+      "adamw_mode": true
     }
   },
   "scheduler": {
