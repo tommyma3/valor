@@ -68,10 +68,9 @@ def main() -> None:
         trust_remote_code=True,
     )
 
-    # Enable gradient checkpointing to save memory
-    model.backbone.gradient_checkpointing_enable()
-
     # Initialize DeepSpeed if config provided
+    # Note: Gradient checkpointing disabled when using DeepSpeed ZeRO-3 + offload
+    # to avoid conflicts with parameter offloading
     use_deepspeed = False
     device = None
     if args.deepspeed is not None:
@@ -103,6 +102,8 @@ def main() -> None:
         device = torch.device(args.device if torch.cuda.is_available() else "cpu")
         if args.device_map is None:
             model.to(device)
+        # Enable gradient checkpointing only for non-DeepSpeed training
+        model.backbone.gradient_checkpointing_enable()
 
     model.train()
     for epoch in range(args.epochs):

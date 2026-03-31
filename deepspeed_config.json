@@ -1,7 +1,7 @@
 {
-  "train_batch_size": 32,
+  "train_batch_size": 16,
   "train_micro_batch_size_per_gpu": 1,
-  "gradient_accumulation_steps": 8,
+  "gradient_accumulation_steps": 4,
   "gradient_clipping": 1.0,
   "bf16": {
     "enabled": true
@@ -17,14 +17,14 @@
       "pin_memory": false
     },
     "overlap_comm": false,
-    "contiguous_gradients": true,
-    "reduce_bucket_size": 1e6,
-    "stage3_prefetch_bucket_size": 1e6,
-    "stage3_param_persistence_threshold": 1e6,
-    "stage3_max_live_parameters": 5e8,
-    "stage3_max_reuse_distance": 5e8,
-    "gather_16bit_weights_on_model_save": true,
-    "round_robin_gradients": true
+    "contiguous_gradients": false,
+    "reduce_bucket_size": 5e5,
+    "stage3_prefetch_bucket_size": 5e5,
+    "stage3_param_persistence_threshold": 5e5,
+    "stage3_max_live_parameters": 2e8,
+    "stage3_max_reuse_distance": 2e8,
+    "stage3_gather_16bit_weights_on_model_save": false,
+    "round_robin_gradients": false
   },
   "optimizer": {
     "type": "Adam",
