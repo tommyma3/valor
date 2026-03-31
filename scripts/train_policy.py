@@ -37,6 +37,8 @@ def parse_args() -> argparse.Namespace:
                        help="Number of steps to accumulate gradients (simulate larger batch size)")
     parser.add_argument("--deepspeed", type=str, default=None,
                        help="Path to DeepSpeed config file (enables DeepSpeed training)")
+    parser.add_argument("--local_rank", type=int, default=0,
+                       help="Local rank for distributed training (passed by DeepSpeed)")
     return parser.parse_args()
 
 
