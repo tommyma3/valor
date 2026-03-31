@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 from torch.distributed.fsdp.api import MixedPrecision, CPUOffload, ShardingStrategy
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
@@ -148,12 +148,19 @@ def main() -> None:
         if is_main_process:
             print(f"Using transformer layer class: {transformer_layer_cls}")
 
-        # Wrap with FSDP
+        # Wrap with FSDP using ModuleWrapPolicy
+        if transformer_layer_cls:
+            auto_wrap_policy = ModuleWrapPolicy({transformer_layer_cls})
+        else:
+            # Fallback to size-based policy if we can't identify transformer layers
+            from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+            auto_wrap_policy = size_based_auto_wrap_policy(
+                min_num_params=1e6,  # Wrap modules with at least 1M params
+            )
+
         model = FSDP(
             model,
-            auto_wrap_policy=transformer_auto_wrap_policy(
-                {transformer_layer_cls},
-            ) if transformer_layer_cls else None,
+            auto_wrap_policy=auto_wrap_policy,
             mixed_precision=mp_policy,
             sharding_strategy=ShardingStrategy.FULL_SHARD,  # ZeRO-3 equivalent
             cpu_offload=CPUOffload(offload_params=True),  # Offload to CPU
