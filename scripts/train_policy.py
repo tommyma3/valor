@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha", type=float, default=1.0)
     parser.add_argument("--indicator-drop-prob", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=1,
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=8,
                        help="Number of steps to accumulate gradients (simulate larger batch size)")
     parser.add_argument("--deepspeed", type=str, default=None,
                        help="Path to DeepSpeed config file (enables DeepSpeed training)")
