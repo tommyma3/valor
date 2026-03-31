@@ -6,24 +6,21 @@
   "bf16": {
     "enabled": true
   },
+  "tensor_parallel": {
+    "autotp_size": 2
+  },
   "zero_optimization": {
-    "stage": 3,
+    "stage": 2,
     "offload_optimizer": {
       "device": "cpu",
       "pin_memory": true
     },
-    "offload_param": {
-      "device": "cpu",
-      "pin_memory": true
-    },
+    "allgather_partitions": true,
+    "allgather_bucket_size": 5e8,
     "overlap_comm": true,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 5e8,
     "contiguous_gradients": true,
-    "reduce_bucket_size": 5e7,
-    "stage3_prefetch_bucket_size": 2e7,
-    "stage3_param_persistence_threshold": 5e5,
-    "stage3_max_live_parameters": 1e7,
-    "stage3_max_reuse_distance": 1e7,
-    "stage3_gather_16bit_weights_on_model_save": false,
     "round_robin_gradients": true
   },
   "optimizer": {
@@ -45,11 +42,7 @@
   },
   "activation_checkpointing": {
     "partition_activations": true,
-    "cpu_checkpointing": true,
-    "contiguous_memory_optimization": false,
-    "number_checkpoints": null,
-    "synchronize_checkpoint_boundary": false,
-    "profile": false
+    "cpu_checkpointing": true
   },
   "wall_clock_breakdown": false,
   "memory_breakdown": false

@@ -66,14 +66,13 @@ def main() -> None:
     use_deepspeed = args.deepspeed is not None and DEEPSPEED_AVAILABLE
 
     if use_deepspeed:
-        # Load model on CPU first, then let DeepSpeed partition to GPUs via ZeRO-3
-        # This avoids loading full model on GPU before partitioning (OOM risk)
-        # while avoiding meta tensor issues with DeepSpeed's .to() calls
-        print("Loading model on CPU for DeepSpeed ZeRO-3 training...")
+        # Load model normally - AutoTP will shard across GPUs
+        # Qwen models have built-in tp_plan that AutoTP will use
+        print("Loading model for DeepSpeed AutoTP + ZeRO-2 training...")
         model = PolicyModel(
             args.backbone,
             torch_dtype=torch_dtype,
-            device_map="cpu",  # Force CPU loading; DeepSpeed handles device mapping
+            device_map=None,  # Load on default device, AutoTP handles sharding
             trust_remote_code=True,
         )
     else:
