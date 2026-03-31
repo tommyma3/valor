@@ -73,6 +73,7 @@ def main() -> None:
 
     # Initialize DeepSpeed if config provided
     use_deepspeed = False
+    device = None
     if args.deepspeed is not None:
         if not DEEPSPEED_AVAILABLE:
             print("WARNING: DeepSpeed requested but not installed. Install with: pip install deepspeed")
@@ -80,6 +81,9 @@ def main() -> None:
             optimizer = torch.optim.AdamW(
                 (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False, eps=1e-7
             )
+            if args.device_map is None:
+                device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+                model.to(device)
         else:
             print(f"Initializing DeepSpeed with config: {args.deepspeed}")
             model, optimizer, _, _ = deepspeed.initialize(
@@ -91,21 +95,11 @@ def main() -> None:
                 dist_init_required=True,
             )
             use_deepspeed = True
+            # DeepSpeed handles all device placement, don't manually move tensors
     else:
         optimizer = torch.optim.AdamW(
             (p for p in model.parameters() if p.requires_grad), lr=args.lr, foreach=False, eps=1e-7
         )
-        if args.device_map is None:
-            # Without DeepSpeed, move model to device
-            device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-            model.to(device)
-        else:
-            device = None
-
-    # Gradient scaler not needed for bfloat16 (has same dynamic range as float32)
-
-    # Handle device placement based on training method
-    if not use_deepspeed:
         if args.device_map is None:
             device = torch.device(args.device if torch.cuda.is_available() else "cpu")
             model.to(device)
@@ -158,7 +152,8 @@ def main() -> None:
                     continue
 
             # Move to device if not using DeepSpeed
-            if not use_deepspeed and device is not None:
+            # DeepSpeed handles device placement automatically
+            if device is not None:
                 base_batch = {k: v.to(device) for k, v in base_batch.items()}
 
             outputs = model(
@@ -190,6 +185,10 @@ def main() -> None:
                     include_advantage=True,
                     indicator_drop_prob=args.indicator_drop_prob,
                 )
+                if device is not None:
+                    indicator_batch = {k: v.to(device) for k, v in indicator_batch.items()}
+
+                # Move to device if needed
                 if device is not None:
                     indicator_batch = {k: v.to(device) for k, v in indicator_batch.items()}
 
