@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import requests
+from openai import OpenAI
 from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -244,7 +245,7 @@ def _configure_logging(output_dir: Path) -> logging.Logger:
 
 
 def _generate_completion(
-    api_key: str,
+    client: Any,
     model: str,
     prompt: str,
     max_tokens: int,
@@ -252,29 +253,22 @@ def _generate_completion(
     top_p: float,
     timeout: int = 120,
 ) -> str:
-    """Generate completion using Moonshot AI API."""
-    url = f"{MOONSHOT_BASE_URL}/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "top_p": top_p,
-    }
-
-    response = requests.post(url, json=payload, headers=headers, timeout=timeout)
-    if response.status_code != 200:
-        print(f"Moonshot API Error: {response.status_code}")
-        print(f"Response: {response.text}")
-        print(f"Payload model: {model}")
-        print(f"Payload max_tokens: {max_tokens}")
-    response.raise_for_status()
-    data = response.json()
-    return str(data["choices"][0]["message"]["content"]).strip()
+    """Generate completion using Moonshot AI API via OpenAI client."""
+    completion = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are Kimi, an AI assistant developed by Moonshot AI. You provide safe, helpful, and accurate responses. You refuse to answer questions involving terrorism, racial discrimination, yellow violence, or other harmful content.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        timeout=timeout,
+    )
+    return str(completion.choices[0].message.content).strip()
 
 
 def _read_queries_tsv(path: Path) -> list[tuple[str, str]]:
@@ -553,7 +547,7 @@ def process_single_query(
     agent_question: str,
     args: argparse.Namespace,
     runtime: BrowseCompToolRuntime,
-    api_key: str,
+    client: Any,
     logger: logging.Logger,
     output_dir: Path,
     trace_dir: Path | None,
@@ -599,7 +593,7 @@ def process_single_query(
         for retry in range(args.format_retries + 1):
             try:
                 completion = _generate_completion(
-                    api_key=api_key,
+                    client=client,
                     model=args.model,
                     prompt=prompt,
                     max_tokens=args.max_new_tokens,
@@ -607,7 +601,7 @@ def process_single_query(
                     top_p=args.top_p,
                     timeout=args.api_timeout,
                 )
-            except requests.RequestException as exc:
+            except Exception as exc:
                 logger.error("Query %s | API request failed (step %d, retry %d): %s", query_id, step, retry, exc)
                 if retry == args.format_retries:
                     status = "error"
@@ -791,6 +785,11 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
     if not api_key:
         raise RuntimeError("MOONSHOT_API_KEY is not set in environment")
 
+    client = OpenAI(
+        api_key=api_key,
+        base_url=MOONSHOT_BASE_URL,
+    )
+
     browsecomp_root = Path(args.browsecomp_root).expanduser().resolve()
     queries_path = (
         Path(args.queries).expanduser().resolve()
@@ -900,7 +899,7 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
             agent_question=agent_question,
             args=args,
             runtime=runtime,
-            api_key=api_key,
+            client=client,
             logger=logger,
             output_dir=output_dir,
             trace_dir=trace_dir,
@@ -999,8 +998,8 @@ def _build_arg_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.0,
-        help="Sampling temperature (default: 0.0).",
+        default=1.0,
+        help="Sampling temperature (default: 1.0). Note: kimi-k2.5 only supports temperature=1.",
     )
     parser.add_argument(
         "--top-p",
