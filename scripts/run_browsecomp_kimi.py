@@ -267,6 +267,11 @@ def _generate_completion(
     }
 
     response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+    if response.status_code != 200:
+        print(f"Moonshot API Error: {response.status_code}")
+        print(f"Response: {response.text}")
+        print(f"Payload model: {model}")
+        print(f"Payload max_tokens: {max_tokens}")
     response.raise_for_status()
     data = response.json()
     return str(data["choices"][0]["message"]["content"]).strip()
