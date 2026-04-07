@@ -17,7 +17,6 @@ REQUIRED_STATE_FIELDS = [
     "prev_tool_result",
 ]
 REQUIRED_ACTION_FIELDS = [
-    "action_think",
     "action_memory_update",
     "action_tool_query",
 ]
@@ -58,7 +57,7 @@ class PolicyDataset(Dataset):
             prev_tool_result=record["prev_tool_result"],
         )
         action = Action(
-            think=record["action_think"],
+            think=record.get("action_think", ""),
             memory_update=record["action_memory_update"],
             tool_query=record["action_tool_query"],
         )
@@ -128,6 +127,9 @@ def collate_policy(
 ) -> Dict[str, torch.Tensor]:
     prompts: List[str] = []
     targets: List[str] = []
+    prompt_char_lens: List[int] = []
+    think_spans: List[tuple[int, int]] = []
+
     for item in batch:
         prompt = _prompt_for_record(
             item["state"],
@@ -135,44 +137,80 @@ def collate_policy(
             advantage_label=item.get("advantage_label"),
             indicator_drop_prob=indicator_drop_prob,
         )
+        action = item["action"]
+        think_text = action.think.strip()
+        think_start = len(prompt) + len("<THINK>\n")
+        think_end = think_start + len(think_text)
+
         prompts.append(prompt)
-        targets.append(format_action(item["action"]))
+        targets.append(format_action(action))
+        prompt_char_lens.append(len(prompt))
+        think_spans.append((think_start, think_end))
 
     full_text = [p + t for p, t in zip(prompts, targets)]
-    enc = tokenizer(
-        full_text,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=max_length,
-    )
-
-    prompt_enc = tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=max_length,
-    )
-
-    labels = enc.input_ids.clone()
-    prompt_lens = prompt_enc.attention_mask.sum(dim=1)
-
-    valid_batches = []
-    for i, length in enumerate(prompt_lens.tolist()):
-        if length < max_length:
-            labels[i, :length] = -100
-            valid_batches.append(i)
-        else:
-            print(f"WARNING: Example {i} has prompt length {length} >= max_length {max_length}, max_length may be too small")
-            # Keep the example but mask everything (will be skipped by loss check)
-            labels[i, :] = -100
-
-    return {
-        "input_ids": enc.input_ids,
-        "attention_mask": enc.attention_mask,
-        "labels": labels,
+    tokenizer_kwargs = {
+        "return_tensors": "pt",
+        "padding": True,
+        "truncation": True,
+        "max_length": max_length,
     }
+    if getattr(tokenizer, "is_fast", False):
+        tokenizer_kwargs["return_offsets_mapping"] = True
+
+    enc = tokenizer(full_text, **tokenizer_kwargs)
+    labels = enc.input_ids.clone()
+    labels[enc.attention_mask == 0] = -100
+
+    if "offset_mapping" in enc:
+        offset_mapping = enc.pop("offset_mapping")
+        for i, (prompt_char_len, think_span) in enumerate(zip(prompt_char_lens, think_spans)):
+            think_start, think_end = think_span
+            for j, (start, end) in enumerate(offset_mapping[i].tolist()):
+                if labels[i, j].item() == -100:
+                    continue
+                if end <= prompt_char_len:
+                    labels[i, j] = -100
+                    continue
+                if start < think_end and end > think_start:
+                    labels[i, j] = -100
+    else:
+        prompt_enc = tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=max_length,
+        )
+        prompt_lens = prompt_enc.attention_mask.sum(dim=1)
+
+        for i, length in enumerate(prompt_lens.tolist()):
+            if length < max_length:
+                labels[i, :length] = -100
+            else:
+                print(
+                    f"WARNING: Example {i} has prompt length {length} >= max_length {max_length}, max_length may be too small"
+                )
+                labels[i, :] = -100
+                continue
+
+            think_prefix = prompts[i] + "<THINK>\n"
+            think_content_prefix = think_prefix + batch[i]["action"].think.strip()
+            think_start_len = len(
+                tokenizer(
+                    think_prefix,
+                    truncation=True,
+                    max_length=max_length,
+                )["input_ids"]
+            )
+            think_end_len = len(
+                tokenizer(
+                    think_content_prefix,
+                    truncation=True,
+                    max_length=max_length,
+                )["input_ids"]
+            )
+            if think_end_len > think_start_len:
+                labels[i, think_start_len:think_end_len] = -100
 
     return {
         "input_ids": enc.input_ids,

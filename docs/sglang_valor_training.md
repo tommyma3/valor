@@ -73,7 +73,7 @@ What this does per iteration:
 3. compute rewards (`final_answer` vs `gold_answer`)
 4. train value model (`Qwen/Qwen3.5-9B` backbone)
 5. compute advantages
-6. train policy model (`Qwen/Qwen3.5-35B-A3B` backbone)
+6. train policy model (`Qwen/Qwen3.5-35B-A3B` backbone, QLoRA adapters over attention + MLP/expert projections)
 7. evaluate on BrowseComp-Plus and log score
 
 ## 4) Multi-Iteration With Updated Policy Checkpoints

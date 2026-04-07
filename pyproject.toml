@@ -13,6 +13,7 @@ dependencies = [
     "huggingface-hub[cli]>=1.7.1",
     "pandas>=3.0.1",
     "peft>=0.18.1",
+    "bitsandbytes>=0.48.1",
     "pyarrow>=23.0.1",
     "pybase64>=1.4.3",
     "pyserini>=1.1.0",

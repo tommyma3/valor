@@ -873,7 +873,8 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
 
         device = torch.device(args.device if torch.cuda.is_available() else "cpu")
         if args.device_map is None:
-            model.to(device)
+            if not getattr(model.backbone, "is_loaded_in_4bit", False):
+                model.to(device)
         model.eval()
 
     snippet_tokenizer = None

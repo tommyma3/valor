@@ -22,7 +22,7 @@ The implementation mirrors the IterResearch flow (policy step -> environment ste
 - `scripts/compute_rewards.py`: assign binary rewards
 - `scripts/train_value.py`: train value head
 - `scripts/compute_advantages.py`: compute advantages + labels
-- `scripts/train_policy.py`: train policy with advantage conditioning
+- `scripts/train_policy.py`: train policy with QLoRA advantage conditioning
 - `scripts/generate_sft.py`: generate SFT data via Kimi API
 - `scripts/run_iterresearch.py`: run the IterResearch prompt on a local model
 - `scripts/test_llm.py`: quick generation sanity check
@@ -150,7 +150,7 @@ uv run python scripts/run_iterresearch.py \
 
 ### 1) (Optional) Pretrain with IterResearch-style SFT
 
-Use `scripts/train_policy.py` with `--alpha 0` to warm-start the model on supervised data.
+Use `scripts/train_policy.py` with `--alpha 0` to warm-start the model on supervised data. The policy trainer now uses QLoRA by default for Qwen3.5-35B-A3B.
 
 ```bash
 uv run python scripts/train_policy.py \
@@ -203,7 +203,8 @@ uv run python scripts/train_policy.py \
   --data data/trajectories_adv.jsonl \
   --output checkpoints/policy_adv \
   --alpha 1.0 \
-  --indicator-drop-prob 0.1
+  --indicator-drop-prob 0.1 \
+  --device-map auto
 ```
 
 ## Quick LLM test
@@ -221,9 +222,10 @@ uv run python scripts/test_llm.py \
 - The value head is a 2-class classifier with logits for `p(V=0|s)` and `p(V=1|s)`.
 - The policy and value heads share the same transformer backbone.
 - Advantage conditioning is implemented by adding a textual indicator (`Advantage: positive/negative`) to the prompt.
+- Policy training uses 4-bit QLoRA adapters on top of the Qwen3.5-35B-A3B backbone.
+- The default LoRA targets cover both attention projections and MLP/expert projections: `q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,w1,w2,w3`.
 - When `--indicator-drop-prob` is non-zero, some samples are trained without the indicator to reduce forgetting.
 - Use `--freeze-backbone` in `scripts/train_value.py` if you only want to learn the value head.
-- Use `--freeze-value-head` in `scripts/train_policy.py` if you want to avoid updating the value head during policy training.
 
 ## Customizing the reward function
 
@@ -231,4 +233,4 @@ The reward script is intentionally simple. For your environment, replace the log
 
 ## Large model usage
 
-Qwen3.5-35B-A3B requires substantial GPU memory. If you need model sharding, pass `--device-map auto` to the training scripts and make sure the checkpoint fits across your GPUs.
+Policy training now assumes QLoRA for `Qwen/Qwen3.5-35B-A3B`. Install `bitsandbytes` alongside `torch`, `transformers`, and `peft` on the remote server, and use `--device-map auto` when the adapter training needs multiple GPUs. Saved policy checkpoints are PEFT adapter directories, and the local inference scripts automatically reconstruct `base model + adapter` when loading them.

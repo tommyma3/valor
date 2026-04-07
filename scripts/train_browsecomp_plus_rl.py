@@ -721,6 +721,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy-max-length", type=int, default=2048)
     parser.add_argument("--policy-alpha", type=float, default=1.0)
     parser.add_argument("--policy-indicator-drop-prob", type=float, default=0.1)
+    parser.add_argument("--policy-bnb-4bit-compute-dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
+    parser.add_argument("--policy-lora-r", type=int, default=64)
+    parser.add_argument("--policy-lora-alpha", type=int, default=128)
+    parser.add_argument("--policy-lora-dropout", type=float, default=0.05)
+    parser.add_argument(
+        "--policy-lora-target-modules",
+        default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,w1,w2,w3",
+    )
 
     parser.add_argument("--train-query-id-file", type=Path, default=None)
     parser.add_argument("--eval-query-id-file", type=Path, default=None)
@@ -1076,6 +1084,16 @@ def main() -> None:
             str(args.policy_alpha),
             "--indicator-drop-prob",
             str(args.policy_indicator_drop_prob),
+            "--bnb-4bit-compute-dtype",
+            args.policy_bnb_4bit_compute_dtype,
+            "--lora-r",
+            str(args.policy_lora_r),
+            "--lora-alpha",
+            str(args.policy_lora_alpha),
+            "--lora-dropout",
+            str(args.policy_lora_dropout),
+            "--lora-target-modules",
+            args.policy_lora_target_modules,
             "--seed",
             str(args.seed + iteration),
         ]
@@ -1145,3 +1163,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

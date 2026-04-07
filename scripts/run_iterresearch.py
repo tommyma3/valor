@@ -240,7 +240,8 @@ def main() -> None:
     report("Preparing device.")
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     if device_map is None:
-        model.to(device)
+        if not getattr(model.backbone, "is_loaded_in_4bit", False):
+            model.to(device)
     model.eval()
 
     report("Starting iterative tool loop.")

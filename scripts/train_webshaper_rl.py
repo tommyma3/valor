@@ -658,6 +658,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--policy-max-length", type=int, default=2048)
     p.add_argument("--policy-alpha", type=float, default=1.0)
     p.add_argument("--policy-indicator-drop-prob", type=float, default=0.1)
+    p.add_argument("--policy-device-map", default=None)
+    p.add_argument("--policy-bnb-4bit-compute-dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
+    p.add_argument("--policy-lora-r", type=int, default=64)
+    p.add_argument("--policy-lora-alpha", type=int, default=128)
+    p.add_argument("--policy-lora-dropout", type=float, default=0.05)
+    p.add_argument(
+        "--policy-lora-target-modules",
+        default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,w1,w2,w3",
+    )
 
     p.add_argument("--hf-token", default=None)
     p.add_argument("--hf-home", default=None)
@@ -745,13 +754,19 @@ def main() -> None:
         ], logger, env)
 
         policy_ckpt = ckpt_dir / "policy"
-        run_command([
+        policy_cmd = [
             sys.executable, str(REPO_ROOT / "scripts" / "train_policy.py"),
             "--data", str(adv), "--output", str(policy_ckpt), "--backbone", current_policy,
             "--batch-size", str(args.policy_batch_size), "--epochs", str(args.policy_epochs), "--lr", str(args.policy_lr),
             "--max-length", str(args.policy_max_length), "--device", args.train_device,
             "--alpha", str(args.policy_alpha), "--indicator-drop-prob", str(args.policy_indicator_drop_prob),
-        ], logger, env)
+            "--bnb-4bit-compute-dtype", args.policy_bnb_4bit_compute_dtype,
+            "--lora-r", str(args.policy_lora_r), "--lora-alpha", str(args.policy_lora_alpha),
+            "--lora-dropout", str(args.policy_lora_dropout), "--lora-target-modules", args.policy_lora_target_modules,
+        ]
+        if args.policy_device_map is not None:
+            policy_cmd.extend(["--device-map", args.policy_device_map])
+        run_command(policy_cmd, logger, env)
 
         eval_rollout_stats = rollout(args, rollout_model if base_model_for_rollout else str(policy_ckpt), eval_rollout_dir, eval_ids, qa_pairs, False, logger)
         score = compute_em(eval_rollout_dir, eval_ids, qa_pairs)
@@ -774,3 +789,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+

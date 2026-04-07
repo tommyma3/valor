@@ -78,7 +78,8 @@ def main() -> None:
             trust_remote_code=True,
         )
         device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-        model.to(device)
+        if not getattr(model.backbone, "is_loaded_in_4bit", False):
+            model.to(device)
         model.eval()
 
     outputs = []
