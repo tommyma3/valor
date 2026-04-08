@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         help="Disable gradient checkpointing on the quantized backbone.",
     )
     parser.add_argument(
+        "--attn-implementation",
+        choices=["auto", "eager", "sdpa", "flash_attention_2"],
+        default="sdpa",
+        help="Attention backend for policy training. Defaults to sdpa to avoid unstable model-specific kernels.",
+    )
+    parser.add_argument(
         "--checkpoint-every",
         type=int,
         default=0,
@@ -146,6 +152,7 @@ def _build_config_snapshot(args: argparse.Namespace, lora_target_modules: list[s
         "lora_dropout": args.lora_dropout,
         "lora_target_modules": list(lora_target_modules),
         "disable_gradient_checkpointing": bool(args.disable_gradient_checkpointing),
+        "attn_implementation": args.attn_implementation,
     }
 
 
@@ -236,7 +243,12 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    print(f"Loading policy backbone with QLoRA from {model_source}...")
+    attn_implementation = None if args.attn_implementation == "auto" else args.attn_implementation
+
+    print(
+        f"Loading policy backbone with QLoRA from {model_source} "
+        f"(attention: {args.attn_implementation})..."
+    )
     model = PolicyModel(
         model_source,
         torch_dtype=compute_dtype,
@@ -249,6 +261,7 @@ def main() -> None:
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         lora_target_modules=lora_target_modules,
+        attn_implementation=attn_implementation,
     )
 
     if not args.disable_gradient_checkpointing and hasattr(model.backbone, "gradient_checkpointing_enable"):

@@ -67,6 +67,12 @@ def parse_args() -> argparse.Namespace:
         default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,w1,w2,w3",
     )
     parser.add_argument(
+        "--policy-attn-implementation",
+        choices=["auto", "eager", "sdpa", "flash_attention_2"],
+        default="sdpa",
+        help="Attention backend for policy training. Defaults to sdpa to avoid unstable model-specific kernels.",
+    )
+    parser.add_argument(
         "--policy-checkpoint-every",
         type=int,
         default=0,
@@ -205,6 +211,8 @@ def train_policy_model(
         str(args.policy_lora_dropout),
         "--lora-target-modules",
         args.policy_lora_target_modules,
+        "--attn-implementation",
+        args.policy_attn_implementation,
         "--checkpoint-every",
         str(args.policy_checkpoint_every),
         "--seed",
@@ -268,6 +276,7 @@ def main() -> None:
             "policy_lora_alpha": args.policy_lora_alpha,
             "policy_lora_dropout": args.policy_lora_dropout,
             "policy_lora_target_modules": args.policy_lora_target_modules,
+            "policy_attn_implementation": args.policy_attn_implementation,
             "policy_checkpoint_every": args.policy_checkpoint_every,
             "policy_resume": args.policy_resume,
             "seed": args.seed,

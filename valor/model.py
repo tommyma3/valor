@@ -109,8 +109,11 @@ def _load_backbone(
     max_memory: Optional[dict] = None,
     offload_folder: Optional[str] = None,
     offload_state_dict: bool = False,
+    attn_implementation: Optional[str] = None,
 ) -> AutoModelForCausalLM:
     config = AutoConfig.from_pretrained(backbone_name, trust_remote_code=trust_remote_code)
+    if attn_implementation is not None:
+        config._attn_implementation = attn_implementation
 
     if device_map == "cpu":
         return AutoModelForCausalLM.from_pretrained(
@@ -120,6 +123,7 @@ def _load_backbone(
             device_map=None,
             trust_remote_code=trust_remote_code,
             low_cpu_mem_usage=True,
+            attn_implementation=attn_implementation,
         ).to("cpu")
 
     return AutoModelForCausalLM.from_pretrained(
@@ -132,6 +136,7 @@ def _load_backbone(
         offload_folder=offload_folder,
         offload_state_dict=offload_state_dict,
         low_cpu_mem_usage=True,
+        attn_implementation=attn_implementation,
     )
 
 
@@ -160,10 +165,13 @@ def _load_policy_backbone(
     lora_alpha: int = 128,
     lora_dropout: float = 0.05,
     lora_target_modules: Optional[list[str]] = None,
+    attn_implementation: Optional[str] = None,
 ) -> AutoModelForCausalLM:
     adapter_metadata = _load_adapter_metadata(backbone_name)
     base_backbone_name = _resolve_policy_backbone_name(backbone_name)
     config = AutoConfig.from_pretrained(base_backbone_name, trust_remote_code=trust_remote_code)
+    if attn_implementation is not None:
+        config._attn_implementation = attn_implementation
 
     should_quantize = use_qlora or adapter_metadata is not None
     quantization_config = None
@@ -183,6 +191,7 @@ def _load_policy_backbone(
         offload_state_dict=offload_state_dict,
         low_cpu_mem_usage=True,
         quantization_config=quantization_config,
+        attn_implementation=attn_implementation,
     )
 
     if adapter_metadata is not None:
@@ -227,6 +236,7 @@ class PolicyModel(nn.Module):
         lora_alpha: int = 128,
         lora_dropout: float = 0.05,
         lora_target_modules: Optional[list[str]] = None,
+        attn_implementation: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.backbone = _load_policy_backbone(
@@ -244,6 +254,7 @@ class PolicyModel(nn.Module):
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
             lora_target_modules=lora_target_modules,
+            attn_implementation=attn_implementation,
         )
 
     def forward(
@@ -283,6 +294,7 @@ class ValueModel(nn.Module):
         max_memory: Optional[dict] = None,
         offload_folder: Optional[str] = None,
         offload_state_dict: bool = False,
+        attn_implementation: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.backbone = _load_backbone(
@@ -293,6 +305,7 @@ class ValueModel(nn.Module):
             max_memory=max_memory,
             offload_folder=offload_folder,
             offload_state_dict=offload_state_dict,
+            attn_implementation=attn_implementation,
         )
         hidden_size = _resolve_hidden_size(self.backbone.config)
         self.value_head = nn.Linear(hidden_size, 2)
