@@ -66,6 +66,17 @@ def parse_args() -> argparse.Namespace:
         "--policy-lora-target-modules",
         default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,w1,w2,w3",
     )
+    parser.add_argument(
+        "--policy-checkpoint-every",
+        type=int,
+        default=0,
+        help="Save a resumable policy checkpoint every N optimizer steps. Set to 0 to disable periodic saves.",
+    )
+    parser.add_argument(
+        "--policy-resume",
+        action="store_true",
+        help="Resume policy training from the latest checkpoint in the output policy directory.",
+    )
 
     parser.add_argument("--train-device", default="cuda")
     parser.add_argument("--seed", type=int, default=42)
@@ -194,11 +205,15 @@ def train_policy_model(
         str(args.policy_lora_dropout),
         "--lora-target-modules",
         args.policy_lora_target_modules,
+        "--checkpoint-every",
+        str(args.policy_checkpoint_every),
         "--seed",
         str(args.seed),
     ]
     if args.policy_device_map is not None:
         policy_cmd.extend(["--device-map", args.policy_device_map])
+    if args.policy_resume:
+        policy_cmd.append("--resume")
 
     run_command(policy_cmd, logger, cwd=REPO_ROOT)
     logger.info("Policy model training completed: %s", policy_ckpt)
@@ -223,17 +238,13 @@ def main() -> None:
     logger.info("Value model: %s", args.value_model)
     logger.info("Policy model: %s", args.policy_model)
 
-    # Train value model
     value_ckpt = train_value_model(args, args.trajectories, args.output_dir, logger)
 
-    # Compute advantages
     advantages_path = args.output_dir / "trajectories_adv.jsonl"
     compute_advantages(args, args.trajectories, value_ckpt, advantages_path, logger)
 
-    # Train policy model
     policy_ckpt = train_policy_model(args, advantages_path, args.output_dir, logger)
 
-    # Save metrics
     metrics = {
         "timestamp": utc_now_iso(),
         "trajectories": str(args.trajectories),
@@ -257,6 +268,8 @@ def main() -> None:
             "policy_lora_alpha": args.policy_lora_alpha,
             "policy_lora_dropout": args.policy_lora_dropout,
             "policy_lora_target_modules": args.policy_lora_target_modules,
+            "policy_checkpoint_every": args.policy_checkpoint_every,
+            "policy_resume": args.policy_resume,
             "seed": args.seed,
         }
     }
@@ -269,4 +282,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

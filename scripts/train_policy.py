@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch.utils.data import DataLoader
@@ -10,7 +11,12 @@ from tqdm import tqdm
 from valor.data import PolicyDataset, collate_policy
 from valor.io_utils import read_jsonl
 from valor.model import DEFAULT_QLORA_TARGET_MODULES, PolicyModel
+from valor.rl_utils import load_json, save_json, utc_now_iso
 from valor.utils import set_seed
+
+
+TRAINING_STATE_FILENAME = "training_state.json"
+OPTIMIZER_STATE_FILENAME = "optimizer.pt"
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,7 +58,22 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable gradient checkpointing on the quantized backbone.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=0,
+        help="Save a resumable checkpoint every N optimizer steps. Set to 0 to disable periodic saves.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume policy training from the latest checkpoint in --output.",
+    )
+
+    args = parser.parse_args()
+    args.data = str(Path(args.data).expanduser().resolve())
+    args.output = str(Path(args.output).expanduser().resolve())
+    return args
 
 
 def _parse_lora_target_modules(raw_value: str) -> list[str]:
@@ -62,7 +83,6 @@ def _parse_lora_target_modules(raw_value: str) -> list[str]:
     return modules
 
 
-
 def _resolve_compute_dtype(dtype_name: str) -> torch.dtype:
     mapping = {
         "bf16": torch.bfloat16,
@@ -70,7 +90,6 @@ def _resolve_compute_dtype(dtype_name: str) -> torch.dtype:
         "fp32": torch.float32,
     }
     return mapping[dtype_name]
-
 
 
 def _resolve_device_map(device: str, raw_device_map: str | None):
@@ -87,6 +106,17 @@ def _resolve_device_map(device: str, raw_device_map: str | None):
     return None
 
 
+def _build_loader(dataset: PolicyDataset, batch_size: int, seed: int, epoch: int) -> DataLoader:
+    generator = torch.Generator()
+    generator.manual_seed(seed + epoch)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=generator,
+        collate_fn=lambda batch: batch,
+    )
+
 
 def _count_trainable_parameters(model: torch.nn.Module) -> tuple[int, int]:
     trainable = 0
@@ -98,34 +128,117 @@ def _count_trainable_parameters(model: torch.nn.Module) -> tuple[int, int]:
     return trainable, total
 
 
+def _build_config_snapshot(args: argparse.Namespace, lora_target_modules: list[str]) -> dict[str, Any]:
+    return {
+        "data": args.data,
+        "backbone": args.backbone,
+        "batch_size": args.batch_size,
+        "epochs": args.epochs,
+        "lr": args.lr,
+        "max_length": args.max_length,
+        "alpha": args.alpha,
+        "indicator_drop_prob": args.indicator_drop_prob,
+        "seed": args.seed,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "bnb_4bit_compute_dtype": args.bnb_4bit_compute_dtype,
+        "lora_r": args.lora_r,
+        "lora_alpha": args.lora_alpha,
+        "lora_dropout": args.lora_dropout,
+        "lora_target_modules": list(lora_target_modules),
+        "disable_gradient_checkpointing": bool(args.disable_gradient_checkpointing),
+    }
+
+
+def _save_optimizer_state(optimizer: torch.optim.Optimizer, output_dir: Path) -> None:
+    optimizer_state_path = output_dir / OPTIMIZER_STATE_FILENAME
+    tmp_path = optimizer_state_path.with_suffix(optimizer_state_path.suffix + ".tmp")
+    torch.save(optimizer.state_dict(), tmp_path)
+    tmp_path.replace(optimizer_state_path)
+
+
+def _save_training_checkpoint(
+    *,
+    output_dir: Path,
+    model: PolicyModel,
+    tokenizer: AutoTokenizer,
+    optimizer: torch.optim.Optimizer,
+    state: dict[str, Any],
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model.save(str(output_dir))
+    tokenizer.save_pretrained(str(output_dir))
+    _save_optimizer_state(optimizer, output_dir)
+    save_json(output_dir / TRAINING_STATE_FILENAME, state)
+
+
+def _load_training_state(output_dir: Path) -> dict[str, Any] | None:
+    state = load_json(output_dir / TRAINING_STATE_FILENAME)
+    if state is not None and not isinstance(state, dict):
+        raise ValueError(f"Expected object in {output_dir / TRAINING_STATE_FILENAME}.")
+    return state
+
+
+def _validate_resume_state(state: dict[str, Any], config_snapshot: dict[str, Any]) -> None:
+    saved_config = state.get("config")
+    if not isinstance(saved_config, dict):
+        raise ValueError("Checkpoint state is missing a valid config snapshot.")
+
+    mismatches: list[str] = []
+    for key, current_value in config_snapshot.items():
+        saved_value = saved_config.get(key)
+        if saved_value != current_value:
+            mismatches.append(f"{key}: saved={saved_value!r}, current={current_value!r}")
+
+    if mismatches:
+        mismatch_text = "; ".join(mismatches)
+        raise ValueError(f"Resume config mismatch for policy checkpoint: {mismatch_text}")
+
+
+def _load_optimizer_state(optimizer: torch.optim.Optimizer, output_dir: Path) -> None:
+    optimizer_state_path = output_dir / OPTIMIZER_STATE_FILENAME
+    if not optimizer_state_path.is_file():
+        raise FileNotFoundError(f"Missing optimizer state for resume: {optimizer_state_path}")
+    optimizer_state = torch.load(optimizer_state_path, map_location="cpu")
+    optimizer.load_state_dict(optimizer_state)
+
 
 def main() -> None:
     args = parse_args()
     set_seed(args.seed)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     if not torch.cuda.is_available():
         raise RuntimeError("Policy QLoRA training requires CUDA and bitsandbytes on the remote server.")
 
     records = read_jsonl(args.data)
-    tokenizer = AutoTokenizer.from_pretrained(args.backbone, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
     dataset = PolicyDataset(records)
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        collate_fn=lambda batch: batch,
-    )
 
     compute_dtype = _resolve_compute_dtype(args.bnb_4bit_compute_dtype)
     device_map = _resolve_device_map(args.device, args.device_map)
     lora_target_modules = _parse_lora_target_modules(args.lora_target_modules)
+    config_snapshot = _build_config_snapshot(args, lora_target_modules)
 
-    print(f"Loading policy backbone with QLoRA from {args.backbone}...")
+    resume_state = None
+    model_source = args.backbone
+    tokenizer_source = args.backbone
+    if args.resume:
+        resume_state = _load_training_state(output_dir)
+        if resume_state is None:
+            raise FileNotFoundError(
+                f"--resume was set but no checkpoint state exists at {output_dir / TRAINING_STATE_FILENAME}"
+            )
+        _validate_resume_state(resume_state, config_snapshot)
+        model_source = str(output_dir)
+        tokenizer_source = str(output_dir)
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    print(f"Loading policy backbone with QLoRA from {model_source}...")
     model = PolicyModel(
-        args.backbone,
+        model_source,
         torch_dtype=compute_dtype,
         device_map=device_map,
         trust_remote_code=True,
@@ -159,15 +272,36 @@ def main() -> None:
         foreach=False,
         eps=1e-7,
     )
+    if resume_state is not None:
+        _load_optimizer_state(optimizer, output_dir)
 
     model.train()
-    for epoch in range(args.epochs):
-        progress = tqdm(enumerate(loader), desc=f"epoch {epoch + 1}", total=len(loader))
+    start_epoch = int(resume_state.get("next_epoch", 0)) if resume_state is not None else 0
+    start_batch_idx = int(resume_state.get("next_batch_idx", 0)) if resume_state is not None else 0
+    optimizer_step = int(resume_state.get("optimizer_step", 0)) if resume_state is not None else 0
+
+    if start_epoch >= args.epochs:
+        print("Training is already complete according to the checkpoint state.")
+        return
+
+    if resume_state is not None:
+        print(
+            "Resuming policy training from "
+            f"epoch {start_epoch + 1}, batch {start_batch_idx + 1}, optimizer step {optimizer_step}."
+        )
+
+    for epoch in range(start_epoch, args.epochs):
+        loader = _build_loader(dataset, args.batch_size, args.seed, epoch)
+        total_batches = len(loader)
+        epoch_start_batch_idx = start_batch_idx if epoch == start_epoch else 0
+        progress = tqdm(enumerate(loader), desc=f"epoch {epoch + 1}", total=total_batches)
         optimizer.zero_grad()
         accumulated_loss = 0.0
         accumulated_batches = 0
 
         for batch_idx, batch in progress:
+            if batch_idx < epoch_start_batch_idx:
+                continue
             if batch is None:
                 continue
 
@@ -235,21 +369,71 @@ def main() -> None:
 
                 optimizer.step()
                 optimizer.zero_grad()
+                optimizer_step += 1
                 avg_loss = accumulated_loss / accumulated_batches if accumulated_batches > 0 else 0.0
                 progress.set_postfix(loss=avg_loss)
                 accumulated_loss = 0.0
                 accumulated_batches = 0
 
+                if args.checkpoint_every > 0 and optimizer_step % args.checkpoint_every == 0:
+                    checkpoint_state = {
+                        "version": 1,
+                        "updated_at": utc_now_iso(),
+                        "optimizer_step": optimizer_step,
+                        "next_epoch": epoch,
+                        "next_batch_idx": batch_idx + 1,
+                        "config": config_snapshot,
+                    }
+                    _save_training_checkpoint(
+                        output_dir=output_dir,
+                        model=model,
+                        tokenizer=tokenizer,
+                        optimizer=optimizer,
+                        state=checkpoint_state,
+                    )
+
         if accumulated_batches > 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
             if not torch.isnan(grad_norm):
                 optimizer.step()
+                optimizer_step += 1
             optimizer.zero_grad()
 
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    model.save(str(output_dir))
-    tokenizer.save_pretrained(str(output_dir))
+            if args.checkpoint_every > 0 and optimizer_step % args.checkpoint_every == 0:
+                checkpoint_state = {
+                    "version": 1,
+                    "updated_at": utc_now_iso(),
+                    "optimizer_step": optimizer_step,
+                    "next_epoch": epoch + 1,
+                    "next_batch_idx": 0,
+                    "config": config_snapshot,
+                }
+                _save_training_checkpoint(
+                    output_dir=output_dir,
+                    model=model,
+                    tokenizer=tokenizer,
+                    optimizer=optimizer,
+                    state=checkpoint_state,
+                )
+
+        start_batch_idx = 0
+
+    final_state = {
+        "version": 1,
+        "updated_at": utc_now_iso(),
+        "optimizer_step": optimizer_step,
+        "next_epoch": args.epochs,
+        "next_batch_idx": 0,
+        "completed": True,
+        "config": config_snapshot,
+    }
+    _save_training_checkpoint(
+        output_dir=output_dir,
+        model=model,
+        tokenizer=tokenizer,
+        optimizer=optimizer,
+        state=final_state,
+    )
     print(f"Saved QLoRA policy adapter to {output_dir}")
 
 
