@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from valor.data import PolicyDataset, collate_policy
 from valor.io_utils import read_jsonl
-from valor.model import DEFAULT_QLORA_TARGET_MODULES, PolicyModel
+from valor.model import DEFAULT_QLORA_TARGET_MODULES, PolicyModel, build_sequence_headroom_device_map
 from valor.rl_utils import load_json, save_json, utc_now_iso
 from valor.utils import set_seed
 
@@ -107,20 +107,25 @@ def _resolve_compute_dtype(dtype_name: str) -> torch.dtype:
     return mapping[dtype_name]
 
 
-def _resolve_device_map(device: str, raw_device_map: str | None, gpu_count: int):
+def _resolve_device_map(
+    device: str,
+    raw_device_map: str | None,
+    gpu_count: int,
+    backbone_name: str,
+) -> tuple[str | dict | None, str | None]:
     if raw_device_map is not None:
         stripped = raw_device_map.strip()
         if stripped.startswith("{"):
-            return json.loads(stripped)
+            return json.loads(stripped), None
         if stripped == "auto" and gpu_count > 1:
-            return "balanced"
-        return stripped
+            return build_sequence_headroom_device_map(backbone_name, gpu_count), "cuda:0"
+        return stripped, None
 
     if device == "cuda":
-        return {"": 0}
+        return {"": 0}, None
     if device.startswith("cuda:"):
-        return {"": int(device.split(":", maxsplit=1)[1])}
-    return None
+        return {"": int(device.split(":", maxsplit=1)[1])}, None
+    return None, None
 
 
 def _parse_max_memory(value: str | None, gpu_count: int) -> dict[int, str] | dict | None:
@@ -249,8 +254,6 @@ def main() -> None:
 
     compute_dtype = _resolve_compute_dtype(args.bnb_4bit_compute_dtype)
     gpu_count = torch.cuda.device_count() if args.device == "cuda" else 0
-    device_map = _resolve_device_map(args.device, args.device_map, gpu_count)
-    max_memory = _parse_max_memory(args.max_memory, gpu_count)
     lora_target_modules = _parse_lora_target_modules(args.lora_target_modules)
     config_snapshot = _build_config_snapshot(args, lora_target_modules)
 
@@ -267,6 +270,9 @@ def main() -> None:
         model_source = str(output_dir)
         tokenizer_source = str(output_dir)
 
+    device_map, io_device = _resolve_device_map(args.device, args.device_map, gpu_count, model_source)
+    max_memory = _parse_max_memory(args.max_memory, gpu_count)
+
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -275,7 +281,8 @@ def main() -> None:
 
     print(
         f"Loading policy backbone with QLoRA from {model_source} "
-        f"(attention: {args.attn_implementation}, device_map: {device_map}, max_memory: {max_memory})..."
+        f"(attention: {args.attn_implementation}, device_map: {device_map}, "
+        f"max_memory: {max_memory}, io_device: {io_device})..."
     )
     model = PolicyModel(
         model_source,
@@ -291,6 +298,7 @@ def main() -> None:
         lora_dropout=args.lora_dropout,
         lora_target_modules=lora_target_modules,
         attn_implementation=attn_implementation,
+        io_device=io_device,
     )
 
     if not args.disable_gradient_checkpointing and hasattr(model.backbone, "gradient_checkpointing_enable"):

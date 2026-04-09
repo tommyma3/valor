@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 from peft import LoraConfig, PeftModel, TaskType, get_peft_model, prepare_model_for_kbit_training
@@ -99,6 +99,55 @@ def _resolve_policy_backbone_name(backbone_name: str) -> str:
             f"Adapter checkpoint '{backbone_name}' is missing base_model_name_or_path in {ADAPTER_CONFIG_FILENAME}."
         )
     return base_model_name
+
+def _resolve_num_hidden_layers(config) -> int:
+    candidates = [
+        "num_hidden_layers",
+        "num_layers",
+        "n_layer",
+        "n_layers",
+    ]
+    for attr in candidates:
+        if hasattr(config, attr):
+            value = getattr(config, attr)
+            if isinstance(value, int):
+                return int(value)
+
+    for nested_attr in ["text_config", "model_config", "llm_config"]:
+        if hasattr(config, nested_attr):
+            nested = getattr(config, nested_attr)
+            try:
+                return _resolve_num_hidden_layers(nested)
+            except ValueError:
+                pass
+
+    raise ValueError("Could not infer number of hidden layers from model config.")
+
+
+def build_sequence_headroom_device_map(
+    backbone_name: str,
+    gpu_count: int,
+    trust_remote_code: bool = True,
+) -> dict[str, int]:
+    if gpu_count <= 1:
+        return {"": 0}
+
+    base_backbone_name = _resolve_policy_backbone_name(backbone_name)
+    config = AutoConfig.from_pretrained(base_backbone_name, trust_remote_code=trust_remote_code)
+    num_hidden_layers = _resolve_num_hidden_layers(config)
+
+    layer_devices = list(range(1, gpu_count))
+    if not layer_devices:
+        layer_devices = [0]
+
+    device_map: dict[str, int] = {
+        "model": 0,
+        "lm_head": 0,
+    }
+    for layer_idx in range(num_hidden_layers):
+        device_bucket = min((layer_idx * len(layer_devices)) // max(num_hidden_layers, 1), len(layer_devices) - 1)
+        device_map[f"model.layers.{layer_idx}"] = layer_devices[device_bucket]
+    return device_map
 
 
 def _load_backbone(
@@ -237,6 +286,7 @@ class PolicyModel(nn.Module):
         lora_dropout: float = 0.05,
         lora_target_modules: Optional[list[str]] = None,
         attn_implementation: Optional[str] = None,
+        io_device: Optional[str | torch.device] = None,
     ) -> None:
         super().__init__()
         self.backbone = _load_policy_backbone(
@@ -256,6 +306,7 @@ class PolicyModel(nn.Module):
             lora_target_modules=lora_target_modules,
             attn_implementation=attn_implementation,
         )
+        self.io_device = torch.device(io_device) if io_device is not None else None
 
     def forward(
         self,
@@ -263,7 +314,7 @@ class PolicyModel(nn.Module):
         attention_mask: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
     ) -> PolicyOutputs:
-        device = next(self.backbone.parameters()).device
+        device = self.io_device or next(self.backbone.parameters()).device
         if input_ids.device != device:
             input_ids = input_ids.to(device)
         if attention_mask.device != device:
