@@ -38,7 +38,16 @@ def parse_args() -> argparse.Namespace:
         help="Number of steps to accumulate gradients before optimizer step.",
     )
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--device-map", default=None)
+    parser.add_argument(
+        "--device-map",
+        default=None,
+        help="Device map for policy training (e.g. auto, balanced, balanced_low_0, sequential, or JSON).",
+    )
+    parser.add_argument(
+        "--max-memory",
+        default=None,
+        help="Per-GPU memory limit (e.g. 20GiB) or JSON dict for max_memory when sharding the model.",
+    )
     parser.add_argument(
         "--bnb-4bit-compute-dtype",
         choices=["bf16", "fp16", "fp32"],
@@ -98,11 +107,13 @@ def _resolve_compute_dtype(dtype_name: str) -> torch.dtype:
     return mapping[dtype_name]
 
 
-def _resolve_device_map(device: str, raw_device_map: str | None):
+def _resolve_device_map(device: str, raw_device_map: str | None, gpu_count: int):
     if raw_device_map is not None:
         stripped = raw_device_map.strip()
         if stripped.startswith("{"):
             return json.loads(stripped)
+        if stripped == "auto" and gpu_count > 1:
+            return "balanced_low_0"
         return stripped
 
     if device == "cuda":
@@ -110,6 +121,30 @@ def _resolve_device_map(device: str, raw_device_map: str | None):
     if device.startswith("cuda:"):
         return {"": int(device.split(":", maxsplit=1)[1])}
     return None
+
+
+def _parse_max_memory(value: str | None, gpu_count: int) -> dict[int, str] | dict | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if raw.startswith("{"):
+        loaded = json.loads(raw)
+        if not isinstance(loaded, dict):
+            raise ValueError("--max-memory JSON must be an object.")
+        return loaded
+    return {idx: raw for idx in range(gpu_count)}
+
+
+def _infer_balanced_max_memory(gpu_count: int) -> dict[int, int] | None:
+    if gpu_count <= 1:
+        return None
+
+    free_memory = [torch.cuda.mem_get_info(idx)[0] for idx in range(gpu_count)]
+    inferred: dict[int, int] = {}
+    for idx, free_bytes in enumerate(free_memory):
+        fraction = 0.70 if idx == 0 else 0.90
+        inferred[idx] = max(int(free_bytes * fraction), 0)
+    return inferred
 
 
 def _build_loader(dataset: PolicyDataset, batch_size: int, seed: int, epoch: int) -> DataLoader:
@@ -146,6 +181,7 @@ def _build_config_snapshot(args: argparse.Namespace, lora_target_modules: list[s
         "indicator_drop_prob": args.indicator_drop_prob,
         "seed": args.seed,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "max_memory": args.max_memory,
         "bnb_4bit_compute_dtype": args.bnb_4bit_compute_dtype,
         "lora_r": args.lora_r,
         "lora_alpha": args.lora_alpha,
@@ -192,6 +228,8 @@ def _validate_resume_state(state: dict[str, Any], config_snapshot: dict[str, Any
 
     mismatches: list[str] = []
     for key, current_value in config_snapshot.items():
+        if key not in saved_config:
+            continue
         saved_value = saved_config.get(key)
         if saved_value != current_value:
             mismatches.append(f"{key}: saved={saved_value!r}, current={current_value!r}")
@@ -222,7 +260,11 @@ def main() -> None:
     dataset = PolicyDataset(records)
 
     compute_dtype = _resolve_compute_dtype(args.bnb_4bit_compute_dtype)
-    device_map = _resolve_device_map(args.device, args.device_map)
+    gpu_count = torch.cuda.device_count() if args.device == "cuda" else 0
+    device_map = _resolve_device_map(args.device, args.device_map, gpu_count)
+    max_memory = _parse_max_memory(args.max_memory, gpu_count)
+    if max_memory is None and isinstance(device_map, str) and gpu_count > 1:
+        max_memory = _infer_balanced_max_memory(gpu_count)
     lora_target_modules = _parse_lora_target_modules(args.lora_target_modules)
     config_snapshot = _build_config_snapshot(args, lora_target_modules)
 
@@ -247,13 +289,14 @@ def main() -> None:
 
     print(
         f"Loading policy backbone with QLoRA from {model_source} "
-        f"(attention: {args.attn_implementation})..."
+        f"(attention: {args.attn_implementation}, device_map: {device_map}, max_memory: {max_memory})..."
     )
     model = PolicyModel(
         model_source,
         torch_dtype=compute_dtype,
         device_map=device_map,
         trust_remote_code=True,
+        max_memory=max_memory,
         use_qlora=True,
         qlora_trainable=True,
         qlora_compute_dtype=compute_dtype,

@@ -58,6 +58,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy-alpha", type=float, default=1.0)
     parser.add_argument("--policy-indicator-drop-prob", type=float, default=0.1)
     parser.add_argument("--policy-device-map", default=None)
+    parser.add_argument(
+        "--policy-max-memory",
+        default=None,
+        help="Per-GPU memory limit (e.g. 20GiB) or JSON dict for policy-model sharding.",
+    )
     parser.add_argument("--policy-bnb-4bit-compute-dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
     parser.add_argument("--policy-lora-r", type=int, default=64)
     parser.add_argument("--policy-lora-alpha", type=int, default=128)
@@ -220,6 +225,8 @@ def train_policy_model(
     ]
     if args.policy_device_map is not None:
         policy_cmd.extend(["--device-map", args.policy_device_map])
+    if args.policy_max_memory is not None:
+        policy_cmd.extend(["--max-memory", args.policy_max_memory])
     if args.policy_resume:
         policy_cmd.append("--resume")
 
@@ -277,6 +284,7 @@ def main() -> None:
             "policy_lora_dropout": args.policy_lora_dropout,
             "policy_lora_target_modules": args.policy_lora_target_modules,
             "policy_attn_implementation": args.policy_attn_implementation,
+            "policy_max_memory": args.policy_max_memory,
             "policy_checkpoint_every": args.policy_checkpoint_every,
             "policy_resume": args.policy_resume,
             "seed": args.seed,
