@@ -113,7 +113,7 @@ def _resolve_device_map(device: str, raw_device_map: str | None, gpu_count: int)
         if stripped.startswith("{"):
             return json.loads(stripped)
         if stripped == "auto" and gpu_count > 1:
-            return "balanced_low_0"
+            return "balanced"
         return stripped
 
     if device == "cuda":
