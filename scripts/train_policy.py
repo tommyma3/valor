@@ -135,18 +135,6 @@ def _parse_max_memory(value: str | None, gpu_count: int) -> dict[int, str] | dic
     return {idx: raw for idx in range(gpu_count)}
 
 
-def _infer_balanced_max_memory(gpu_count: int) -> dict[int, int] | None:
-    if gpu_count <= 1:
-        return None
-
-    free_memory = [torch.cuda.mem_get_info(idx)[0] for idx in range(gpu_count)]
-    inferred: dict[int, int] = {}
-    for idx, free_bytes in enumerate(free_memory):
-        fraction = 0.70 if idx == 0 else 0.90
-        inferred[idx] = max(int(free_bytes * fraction), 0)
-    return inferred
-
-
 def _build_loader(dataset: PolicyDataset, batch_size: int, seed: int, epoch: int) -> DataLoader:
     generator = torch.Generator()
     generator.manual_seed(seed + epoch)
@@ -263,8 +251,6 @@ def main() -> None:
     gpu_count = torch.cuda.device_count() if args.device == "cuda" else 0
     device_map = _resolve_device_map(args.device, args.device_map, gpu_count)
     max_memory = _parse_max_memory(args.max_memory, gpu_count)
-    if max_memory is None and isinstance(device_map, str) and gpu_count > 1:
-        max_memory = _infer_balanced_max_memory(gpu_count)
     lora_target_modules = _parse_lora_target_modules(args.lora_target_modules)
     config_snapshot = _build_config_snapshot(args, lora_target_modules)
 
