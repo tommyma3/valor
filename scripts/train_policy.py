@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from valor.data import PolicyDataset, collate_policy
 from valor.io_utils import read_jsonl
-from valor.model import DEFAULT_QLORA_TARGET_MODULES, PolicyModel, build_sequence_headroom_device_map
+from valor.model import DEFAULT_QLORA_TARGET_MODULES, PolicyModel
 from valor.rl_utils import load_json, save_json, utc_now_iso
 from valor.utils import set_seed
 
@@ -113,12 +113,13 @@ def _resolve_device_map(
     gpu_count: int,
     backbone_name: str,
 ) -> tuple[str | dict | None, str | None]:
+    del backbone_name
     if raw_device_map is not None:
         stripped = raw_device_map.strip()
         if stripped.startswith("{"):
             return json.loads(stripped), None
         if stripped == "auto" and gpu_count > 1:
-            return build_sequence_headroom_device_map(backbone_name, gpu_count), "cuda:0"
+            return "balanced_low_0", "cuda:0"
         return stripped, None
 
     if device == "cuda":
