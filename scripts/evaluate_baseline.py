@@ -156,14 +156,14 @@ def build_rollout_command(
         str(query_id_file),
     ]
 
-    if args.sglang_url:
-        cmd.extend(["--sglang-url", args.sglang_url])
-        if args.sglang_model:
-            cmd.extend(["--sglang-model", args.sglang_model])
-        if args.sglang_api_key:
-            cmd.extend(["--sglang-api-key", args.sglang_api_key])
-        if args.sglang_timeout is not None:
-            cmd.extend(["--sglang-timeout", str(args.sglang_timeout)])
+    if args.vllm_url:
+        cmd.extend(["--vllm-url", args.vllm_url])
+        if args.vllm_model:
+            cmd.extend(["--vllm-model", args.vllm_model])
+        if args.vllm_api_key:
+            cmd.extend(["--vllm-api-key", args.vllm_api_key])
+        if args.vllm_timeout is not None:
+            cmd.extend(["--vllm-timeout", str(args.vllm_timeout)])
 
     if args.device_map is not None:
         cmd.extend(["--device-map", args.device_map])
@@ -313,10 +313,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--offload-folder", default=None)
     parser.add_argument("--offload-state-dict", action="store_true")
 
-    parser.add_argument("--sglang-url", default="", help="SGLang URL")
-    parser.add_argument("--sglang-model", default="", help="Model name for SGLang")
-    parser.add_argument("--sglang-api-key", default=None)
-    parser.add_argument("--sglang-timeout", type=int, default=120)
+    parser.add_argument("--vllm-url", "--sglang-url", dest="vllm_url", default="", help="vLLM URL")
+    parser.add_argument("--vllm-model", "--sglang-model", dest="vllm_model", default="", help="Model name for vLLM")
+    parser.add_argument("--vllm-api-key", "--sglang-api-key", dest="vllm_api_key", default=None)
+    parser.add_argument("--vllm-timeout", "--sglang-timeout", dest="vllm_timeout", type=int, default=120)
 
     parser.add_argument("--official-eval", action="store_true")
     parser.add_argument("--official-eval-model", default="Qwen/Qwen3-32B")

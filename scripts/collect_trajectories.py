@@ -33,9 +33,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--sglang-url", default="", help="SGLang OpenAI-compatible base URL.")
-    parser.add_argument("--sglang-model", default="", help="Model name for SGLang server.")
-    parser.add_argument("--sglang-api-key", default=os.getenv("SGLANG_API_KEY", ""))
+    parser.add_argument(
+        "--vllm-url",
+        "--sglang-url",
+        dest="vllm_url",
+        default="",
+        help="vLLM OpenAI-compatible base URL.",
+    )
+    parser.add_argument(
+        "--vllm-model",
+        "--sglang-model",
+        dest="vllm_model",
+        default="",
+        help="Model name for the vLLM server.",
+    )
+    parser.add_argument(
+        "--vllm-api-key",
+        "--sglang-api-key",
+        dest="vllm_api_key",
+        default=os.getenv("VLLM_API_KEY", os.getenv("SGLANG_API_KEY", "")),
+    )
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument(
         "--advantage-label",
@@ -46,7 +63,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _sglang_chat(
+def _vllm_chat(
     base_url: str,
     model: str,
     prompt: str,
@@ -80,10 +97,10 @@ def main() -> None:
     advantage_label = _resolve_advantage_label(args.advantage_label)
 
     records = read_jsonl(args.states)
-    use_sglang = bool(args.sglang_url)
+    use_vllm = bool(args.vllm_url)
 
-    if use_sglang:
-        model_name = args.sglang_model or args.checkpoint
+    if use_vllm:
+        model_name = args.vllm_model or args.checkpoint
     else:
         tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, trust_remote_code=True)
         if tokenizer.pad_token is None:
@@ -115,15 +132,15 @@ def main() -> None:
             advantage_label=advantage_label,
         )
 
-        if use_sglang:
-            completion = _sglang_chat(
-                args.sglang_url,
+        if use_vllm:
+            completion = _vllm_chat(
+                args.vllm_url,
                 model_name,
                 prompt,
                 temperature=args.temperature,
                 top_p=args.top_p,
                 max_tokens=args.max_new_tokens,
-                api_key=args.sglang_api_key,
+                api_key=args.vllm_api_key,
                 timeout=args.timeout,
             )
         else:

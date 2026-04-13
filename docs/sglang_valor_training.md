@@ -1,9 +1,9 @@
-﻿# Train VALOR With SGLang Rollouts (BrowseComp-Plus)
+# Train VALOR With vLLM Rollouts (BrowseComp-Plus)
 
-This note explains how to set up **SGLang** and run the new RL loop script:
+This note explains how to set up **vLLM** and run the new RL loop script:
 
 - `scripts/train_browsecomp_plus_rl.py`
-- rollout backend: `scripts/run_browsecomp_plus.py --sglang-*`
+- rollout backend: `scripts/run_browsecomp_plus.py --vllm-*`
 
 ## 1) Prerequisites
 
@@ -15,22 +15,21 @@ This note explains how to set up **SGLang** and run the new RL loop script:
 
 Useful sources:
 
-- [SGLang install docs](https://docs.sglang.io/get_started/install.html)
-- [SGLang OpenAI-compatible API docs](https://docs.sglang.io/basic_usage/openai_api_completions.html)
+- [vLLM docs](https://docs.vllm.ai/)
+- [vLLM OpenAI-compatible server docs](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html)
 
-## 2) Install and Start SGLang
+## 2) Install and Start vLLM
 
-Install SGLang in the same environment where you run VALOR:
+Install vLLM in the same environment where you run VALOR:
 
 ```bash
-uv pip install sglang
+uv pip install vllm
 ```
 
-Start an OpenAI-compatible SGLang server (example on port `8000`):
+Start an OpenAI-compatible vLLM server (example on port `8000`):
 
 ```bash
-python -m sglang.launch_server \
-  --model-path Qwen/Qwen3.5-9B \
+vllm serve Qwen/Qwen3.5-9B \
   --host 0.0.0.0 \
   --port 8000
 ```
@@ -41,7 +40,7 @@ Then sanity-check the endpoint:
 curl http://127.0.0.1:8000/v1/models
 ```
 
-## 3) Run RL Training Loop (SGLang Rollouts)
+## 3) Run RL Training Loop (vLLM Rollouts)
 
 From repo root:
 
@@ -56,8 +55,8 @@ uv run python scripts/train_browsecomp_plus_rl.py \
   --policy-init-model "Qwen/Qwen3.5-9B" \
   --value-init-model "Qwen/Qwen3.5-9B" \
   --num-iters 1 \
-  --rollout-sglang-url "http://127.0.0.1:8000" \
-  --rollout-sglang-model "Qwen/Qwen3.5-9B" \
+  --rollout-vllm-url "http://127.0.0.1:8000" \
+  --rollout-vllm-model "Qwen/Qwen3.5-9B" \
   --rollout-max-steps 24 \
   --rollout-max-new-tokens 768 \
   --agent-prompt-template browsecomp \
@@ -68,7 +67,7 @@ uv run python scripts/train_browsecomp_plus_rl.py \
 
 What this does per iteration:
 
-1. rollout training trajectories on WebShaper QA pairs (via SGLang)
+1. rollout training trajectories on WebShaper QA pairs (via vLLM)
 2. build transition dataset from traces
 3. compute rewards (`final_answer` vs `gold_answer`)
 4. train value model (`Qwen/Qwen3.5-9B` backbone)
@@ -80,13 +79,13 @@ Note: the revised VALOR plan uses separate policy and value models. The RL loop 
 
 ## 4) Multi-Iteration With Updated Policy Checkpoints
 
-If your SGLang server is serving one fixed model, you should run **one iteration at a time** and restart SGLang with the latest policy checkpoint.
+If your vLLM server is serving one fixed model, you should run **one iteration at a time** and restart vLLM with the latest policy checkpoint.
 
 After iteration 1, the policy checkpoint is:
 
 - `runs/browsecomp_plus/rl_qwen9b_sglang/iter_001/checkpoints/policy`
 
-Restart SGLang with that checkpoint, then resume training:
+Restart vLLM with that checkpoint, then resume training:
 
 ```bash
 uv run python scripts/train_browsecomp_plus_rl.py \
@@ -100,8 +99,8 @@ uv run python scripts/train_browsecomp_plus_rl.py \
   --value-init-model "Qwen/Qwen3.5-9B" \
   --num-iters 3 \
   --resume \
-  --rollout-sglang-url "http://127.0.0.1:8000" \
-  --rollout-sglang-model "runs/browsecomp_plus/rl_qwen9b_sglang/iter_001/checkpoints/policy" \
+  --rollout-vllm-url "http://127.0.0.1:8000" \
+  --rollout-vllm-model "runs/browsecomp_plus/rl_qwen9b_sglang/iter_001/checkpoints/policy" \
   --train-qa-source webshaper \
   --webshaper-dataset "Alibaba-NLP/WebShaper" \
   --webshaper-split main
@@ -132,6 +131,6 @@ Optionally enable official BrowseComp evaluation each iteration:
 
 ## 6) Common Pitfalls
 
-- If rollouts fail with unknown model on SGLang, check `--rollout-sglang-model` exactly matches what SGLang serves.
+- If rollouts fail with unknown model on vLLM, check `--rollout-vllm-model` exactly matches what vLLM serves.
 - If FAISS retriever fails, verify `tevatron`, `qwen-omni-utils`, and index paths.
 - If model loading fails, use absolute paths for local checkpoints.

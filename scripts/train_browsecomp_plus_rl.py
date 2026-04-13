@@ -127,14 +127,14 @@ def build_rollout_command(
         str(query_id_file),
     ]
 
-    if args.rollout_sglang_url:
-        cmd.extend(["--sglang-url", args.rollout_sglang_url])
-        if args.rollout_sglang_model:
-            cmd.extend(["--sglang-model", args.rollout_sglang_model])
-        if args.rollout_sglang_api_key:
-            cmd.extend(["--sglang-api-key", args.rollout_sglang_api_key])
-        if args.rollout_sglang_timeout is not None:
-            cmd.extend(["--sglang-timeout", str(args.rollout_sglang_timeout)])
+    if args.rollout_vllm_url:
+        cmd.extend(["--vllm-url", args.rollout_vllm_url])
+        if args.rollout_vllm_model:
+            cmd.extend(["--vllm-model", args.rollout_vllm_model])
+        if args.rollout_vllm_api_key:
+            cmd.extend(["--vllm-api-key", args.rollout_vllm_api_key])
+        if args.rollout_vllm_timeout is not None:
+            cmd.extend(["--vllm-timeout", str(args.rollout_vllm_timeout)])
 
     if args.rollout_device_map is not None:
         cmd.extend(["--device-map", args.rollout_device_map])
@@ -379,25 +379,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rollout-top-p", type=float, default=0.9)
     parser.add_argument("--rollout-checkpoint-every", type=int, default=50)
     parser.add_argument(
+        "--rollout-vllm-url",
         "--rollout-sglang-url",
+        dest="rollout_vllm_url",
         default="",
-        help="If set, rollout generation uses SGLang OpenAI-compatible endpoint.",
+        help="If set, rollout generation uses a vLLM OpenAI-compatible endpoint.",
     )
     parser.add_argument(
+        "--rollout-vllm-model",
         "--rollout-sglang-model",
+        dest="rollout_vllm_model",
         default="",
-        help="Model name sent to SGLang. Defaults to current --model-path each iteration.",
+        help="Model name sent to vLLM. Defaults to current --model-path each iteration.",
     )
     parser.add_argument(
+        "--rollout-vllm-api-key",
         "--rollout-sglang-api-key",
+        dest="rollout_vllm_api_key",
         default=None,
-        help="Optional API key for SGLang endpoint.",
+        help="Optional API key for vLLM endpoint.",
     )
     parser.add_argument(
+        "--rollout-vllm-timeout",
         "--rollout-sglang-timeout",
+        dest="rollout_vllm_timeout",
         type=int,
         default=120,
-        help="Timeout seconds for each SGLang generation request.",
+        help="Timeout seconds for each vLLM generation request.",
     )
 
     parser.add_argument("--rollout-device", default="cuda")
@@ -573,15 +581,15 @@ def main() -> None:
     logger.info("Loaded eval QA pairs (browsecomp): %d", len(eval_qa_pairs))
     logger.info("Train queries: %d | Eval queries: %d", len(train_ids), len(eval_ids))
 
-    if args.rollout_sglang_url:
+    if args.rollout_vllm_url:
         logger.info(
-            "SGLang rollout mode enabled | url=%s | model_override=%s",
-            args.rollout_sglang_url,
-            args.rollout_sglang_model or "<none>",
+            "vLLM rollout mode enabled | url=%s | model_override=%s",
+            args.rollout_vllm_url,
+            args.rollout_vllm_model or "<none>",
         )
-        if not args.rollout_sglang_model and args.num_iters > 1:
+        if not args.rollout_vllm_model and args.num_iters > 1:
             logger.warning(
-                "SGLang model name is not fixed. The script will send each iteration's policy checkpoint path as model id; ensure your SGLang server can resolve/load it."
+                "vLLM model name is not fixed. The script will send each iteration's policy checkpoint path as model id; ensure your vLLM server can resolve/load it."
             )
 
     state_path = args.output_root / "training_state.json"

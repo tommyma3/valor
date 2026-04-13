@@ -1,4 +1,4 @@
-"""Collect trajectories using SGLang for RL training."""
+"""Collect trajectories using vLLM for RL training."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from valor.rl_utils import (
     load_query_ids,
     read_jsonl,
     save_json,
+    utc_now_iso,
     write_jsonl,
     write_query_ids,
     write_queries_tsv,
@@ -123,14 +124,14 @@ def build_rollout_command(
     if args.max_queries is not None:
         cmd.extend(["--max-queries", str(args.max_queries)])
 
-    if args.sglang_url:
-        cmd.extend(["--sglang-url", args.sglang_url])
-        if args.sglang_model:
-            cmd.extend(["--sglang-model", args.sglang_model])
-        if args.sglang_api_key:
-            cmd.extend(["--sglang-api-key", args.sglang_api_key])
-        if args.sglang_timeout is not None:
-            cmd.extend(["--sglang-timeout", str(args.sglang_timeout)])
+    if args.vllm_url:
+        cmd.extend(["--vllm-url", args.vllm_url])
+        if args.vllm_model:
+            cmd.extend(["--vllm-model", args.vllm_model])
+        if args.vllm_api_key:
+            cmd.extend(["--vllm-api-key", args.vllm_api_key])
+        if args.vllm_timeout is not None:
+            cmd.extend(["--vllm-timeout", str(args.vllm_timeout)])
 
     if args.device_map is not None:
         cmd.extend(["--device-map", args.device_map])
@@ -218,7 +219,7 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Collect trajectories using SGLang for RL training."
+        description="Collect trajectories using vLLM for RL training."
     )
     parser.add_argument("--browsecomp-root", type=Path, required=True, help="BrowseComp repository root")
     parser.add_argument("--queries-tsv", type=Path, required=True, help="Queries TSV file")
@@ -226,7 +227,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--query-id-file", type=Path, help="File with query IDs to process (optional, uses all queries if not provided)")
     parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
 
-    parser.add_argument("--model-path", required=True, help="Model path for rollouts (SGLang or local)")
+    parser.add_argument("--model-path", required=True, help="Model path for rollouts (vLLM or local)")
     parser.add_argument("--searcher-type", choices=["bm25", "faiss", "reasonir", "custom"], required=True)
     parser.add_argument("--index-path", required=True, help="Path to search index")
     parser.add_argument("--retriever-model-name", default=None, help="Retriever model name for faiss/reasonir")
@@ -281,10 +282,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--offload-folder", default=None)
     parser.add_argument("--offload-state-dict", action="store_true")
 
-    parser.add_argument("--sglang-url", default="", help="SGLang URL for rollouts")
-    parser.add_argument("--sglang-model", default="", help="Model name for SGLang")
-    parser.add_argument("--sglang-api-key", default=None, help="API key for SGLang")
-    parser.add_argument("--sglang-timeout", type=int, default=120, help="SGLang timeout in seconds")
+    parser.add_argument("--vllm-url", "--sglang-url", dest="vllm_url", default="", help="vLLM URL for rollouts")
+    parser.add_argument("--vllm-model", "--sglang-model", dest="vllm_model", default="", help="Model name for vLLM")
+    parser.add_argument("--vllm-api-key", "--sglang-api-key", dest="vllm_api_key", default=None, help="API key for vLLM")
+    parser.add_argument("--vllm-timeout", "--sglang-timeout", dest="vllm_timeout", type=int, default=120, help="vLLM timeout in seconds")
 
     parser.add_argument("--hf-token", default=None)
     parser.add_argument("--hf-home", default=None)
@@ -355,7 +356,7 @@ def main() -> None:
 
     logger.info("Starting trajectory collection for %d queries", len(query_ids))
     logger.info("Model: %s", args.model_path)
-    logger.info("SGLang URL: %s", args.sglang_url or "<not using SGLang>")
+    logger.info("vLLM URL: %s", args.vllm_url or "<not using vLLM>")
 
     rollout_dir = args.output_dir / "rollouts"
     rollout_dir.mkdir(parents=True, exist_ok=True)

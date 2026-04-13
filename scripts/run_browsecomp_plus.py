@@ -330,7 +330,7 @@ def _generate_completion(
     ).completion
 
 
-def _sglang_chat(
+def _vllm_chat(
     base_url: str,
     model_name: str,
     prompt: str,
@@ -355,10 +355,6 @@ def _sglang_chat(
         "temperature": temperature,
         "top_p": top_p,
         "max_tokens": max_new_tokens,
-        # We parse the raw tagged text ourselves. If SGLang splits Qwen-style
-        # thinking into `reasoning_content`, `message.content` can end up empty
-        # and every rollout step looks malformed.
-        "separate_reasoning": False,
     }
 
     response = requests.post(url, json=payload, headers=headers, timeout=timeout)
@@ -693,25 +689,33 @@ def _build_arg_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace
     parser.add_argument("--offload-state-dict", action="store_true")
 
     parser.add_argument(
+        "--vllm-url",
         "--sglang-url",
+        dest="vllm_url",
         default="",
-        help="SGLang OpenAI-compatible base URL. If set, rollouts use SGLang for generation.",
+        help="vLLM OpenAI-compatible base URL. If set, rollouts use vLLM for generation.",
     )
     parser.add_argument(
+        "--vllm-model",
         "--sglang-model",
+        dest="vllm_model",
         default="",
-        help="Model name sent to SGLang. Defaults to --model-path when omitted.",
+        help="Model name sent to vLLM. Defaults to --model-path when omitted.",
     )
     parser.add_argument(
+        "--vllm-api-key",
         "--sglang-api-key",
-        default=os.getenv("SGLANG_API_KEY", ""),
-        help="API key for SGLang server (optional).",
+        dest="vllm_api_key",
+        default=os.getenv("VLLM_API_KEY", os.getenv("SGLANG_API_KEY", "")),
+        help="API key for vLLM server (optional).",
     )
     parser.add_argument(
+        "--vllm-timeout",
         "--sglang-timeout",
+        dest="vllm_timeout",
         type=int,
         default=120,
-        help="Timeout (seconds) for SGLang generation requests.",
+        help="Timeout (seconds) for vLLM generation requests.",
     )
 
     parser.add_argument("--max-new-tokens", type=int, default=768)
@@ -862,18 +866,18 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
         logger.info("Nothing to run.")
         return
 
-    use_sglang = bool(args.sglang_url.strip())
-    sglang_model_name = args.sglang_model.strip() or args.model_path
+    use_vllm = bool(args.vllm_url.strip())
+    vllm_model_name = args.vllm_model.strip() or args.model_path
 
     model: PolicyModel | None = None
     tokenizer: AutoTokenizer | None = None
     device: torch.device | None = None
 
-    if use_sglang:
+    if use_vllm:
         logger.info(
-            "Using SGLang backend | url=%s | model=%s",
-            args.sglang_url,
-            sglang_model_name,
+            "Using vLLM backend | url=%s | model=%s",
+            args.vllm_url,
+            vllm_model_name,
         )
     else:
         torch_dtype = _resolve_dtype(args.dtype, args.device)
@@ -1010,16 +1014,16 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                     if attempt == 0
                     else base_prompt + _format_retry_suffix(format_error)
                 )
-                if use_sglang:
-                    completion = _sglang_chat(
-                        args.sglang_url,
-                        sglang_model_name,
+                if use_vllm:
+                    completion = _vllm_chat(
+                        args.vllm_url,
+                        vllm_model_name,
                         prompt,
                         temperature=args.temperature,
                         top_p=args.top_p,
                         max_new_tokens=args.max_new_tokens,
-                        api_key=args.sglang_api_key,
-                        timeout=args.sglang_timeout,
+                        api_key=args.vllm_api_key,
+                        timeout=args.vllm_timeout,
                     )
                 else:
                     assert model is not None and tokenizer is not None and device is not None
@@ -1185,8 +1189,8 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                 "max_new_tokens": args.max_new_tokens,
                 "agent_prompt_template": args.agent_prompt_template,
                 "parser_mode": "strict_v2",
-                "generation_backend": "sglang" if use_sglang else "local",
-                "generation_model": sglang_model_name if use_sglang else args.model_path,
+                "generation_backend": "vllm" if use_vllm else "local",
+                "generation_model": vllm_model_name if use_vllm else args.model_path,
             },
             "query_id": query_id,
             "tool_call_counts": runtime.tool_call_counts,

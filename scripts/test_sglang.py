@@ -11,16 +11,20 @@ from valor.generation import STRICT_FORMAT_SYSTEM_PROMPT, build_chat_messages
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Smoke-test an SGLang OpenAI-compatible endpoint.")
-    parser.add_argument("--url", default="http://127.0.0.1:8000", help="SGLang base URL.")
-    parser.add_argument("--model", required=True, help="Model name to send to SGLang.")
+    parser = argparse.ArgumentParser(description="Smoke-test a vLLM/OpenAI-compatible endpoint.")
+    parser.add_argument("--url", default="http://127.0.0.1:8000", help="vLLM base URL.")
+    parser.add_argument("--model", required=True, help="Model name to send to vLLM.")
     parser.add_argument(
         "--mode",
         choices=["simple", "browsecomp"],
         default="simple",
         help="Prompt mode. 'simple' checks basic chat output, 'browsecomp' checks structured tool-call output.",
     )
-    parser.add_argument("--api-key", default=os.getenv("SGLANG_API_KEY", ""), help="Optional API key.")
+    parser.add_argument(
+        "--api-key",
+        default=os.getenv("VLLM_API_KEY", os.getenv("SGLANG_API_KEY", "")),
+        help="Optional API key.",
+    )
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--temperature", type=float, default=0.0)

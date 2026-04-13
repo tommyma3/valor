@@ -5,9 +5,9 @@ This directory contains the split RL training scripts for VALOR. The original mo
 ## Scripts Overview
 
 ### 1. `collect_trajectories_rl.py`
-Collects trajectories using SGLang for RL training. This script:
+Collects trajectories using vLLM for RL training. This script:
 - Loads QA pairs (from BrowseComp or WebShaper)
-- Runs rollouts using the specified model (via SGLang or local)
+- Runs rollouts using the specified model (via vLLM or local)
 - Converts rollouts to RL transition format
 - Computes binary rewards based on exact match
 
@@ -62,8 +62,8 @@ python scripts/collect_trajectories_rl.py \\
     --model-path Qwen/Qwen3.5-9B \\
     --searcher-type bm25 \\
     --index-path /path/to/index \\
-    --sglang-url http://localhost:30000 \\
-    --sglang-model Qwen/Qwen3.5-9B
+    --vllm-url http://localhost:30000 \\
+    --vllm-model Qwen/Qwen3.5-9B
 
 # Using WebShaper data
 python scripts/collect_trajectories_rl.py \\
@@ -75,7 +75,7 @@ python scripts/collect_trajectories_rl.py \\
     --model-path Qwen/Qwen3.5-9B \\
     --searcher-type bm25 \\
     --index-path /path/to/index \\
-    --sglang-url http://localhost:30000
+    --vllm-url http://localhost:30000
 ```
 
 ### 2. Train Value and Policy Models
@@ -104,7 +104,7 @@ python scripts/evaluate_baseline.py \\
     --model-path Qwen/Qwen3.5-9B \\
     --searcher-type bm25 \\
     --index-path /path/to/index \\
-    --sglang-url http://localhost:30000 \\
+    --vllm-url http://localhost:30000 \\
     --output-dir runs/baseline_eval \\
     --official-eval
 
@@ -117,7 +117,7 @@ python scripts/evaluate_baseline.py \\
     --model-path runs/iter_001_checkpoints/checkpoints/policy \\
     --searcher-type bm25 \\
     --index-path /path/to/index \\
-    --sglang-url http://localhost:30000 \\
+    --vllm-url http://localhost:30000 \\
     --output-dir runs/iter_001_eval \\
     --official-eval
 ```
@@ -151,7 +151,7 @@ A complete RL training iteration consists of:
 
 ### Trajectory Collection
 - `--model-path`: Model for rollouts (local path or HuggingFace ID)
-- `--sglang-url`: SGLang server URL (optional, uses local model if not provided)
+- `--vllm-url`: vLLM server URL (optional, uses local model if not provided)
 - `--max-steps`: Maximum steps per trajectory (default: 24)
 - `--temperature`: Generation temperature (default: 0.0)
 

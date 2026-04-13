@@ -269,7 +269,7 @@ def normalize_tool_call(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return str(name), params
 
 
-def sglang_chat(base_url: str, model: str, prompt: str, temperature: float, top_p: float, max_tokens: int, api_key: str, timeout: int) -> str:
+def vllm_chat(base_url: str, model: str, prompt: str, temperature: float, top_p: float, max_tokens: int, api_key: str, timeout: int) -> str:
     url = base_url.rstrip("/") + "/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -389,15 +389,15 @@ def rollout(args: argparse.Namespace, model_name: str, output_dir: Path, query_i
                     observation=last_obs,
                 )
 
-            completion = sglang_chat(
-                args.sglang_url,
+            completion = vllm_chat(
+                args.vllm_url,
                 model_name,
                 prompt,
                 temperature=args.rollout_temperature,
                 top_p=args.rollout_top_p,
                 max_tokens=args.rollout_max_new_tokens,
-                api_key=args.sglang_api_key or "",
-                timeout=args.sglang_timeout,
+                api_key=args.vllm_api_key or "",
+                timeout=args.vllm_timeout,
             )
 
             report = extract_tag(completion, "report")
@@ -456,15 +456,15 @@ def rollout(args: argparse.Namespace, model_name: str, output_dir: Path, query_i
                 action=last_action,
                 observation=last_obs,
             )
-            completion = sglang_chat(
-                args.sglang_url,
+            completion = vllm_chat(
+                args.vllm_url,
                 model_name,
                 prompt,
                 temperature=args.rollout_temperature,
                 top_p=args.rollout_top_p,
                 max_tokens=args.rollout_max_new_tokens,
-                api_key=args.sglang_api_key or "",
-                timeout=args.sglang_timeout,
+                api_key=args.vllm_api_key or "",
+                timeout=args.vllm_timeout,
             )
             report = extract_tag(completion, "report")
             answer = extract_tag(completion, "answer")
@@ -635,10 +635,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--policy-init-model", default="Qwen/Qwen3.5-9B")
     p.add_argument("--value-init-model", default="Qwen/Qwen3.5-9B")
 
-    p.add_argument("--sglang-url", required=True)
-    p.add_argument("--sglang-api-key", default=None)
-    p.add_argument("--rollout-sglang-model", default="")
-    p.add_argument("--sglang-timeout", type=int, default=120)
+    p.add_argument("--vllm-url", "--sglang-url", dest="vllm_url", required=True)
+    p.add_argument("--vllm-api-key", "--sglang-api-key", dest="vllm_api_key", default=None)
+    p.add_argument("--rollout-vllm-model", "--rollout-sglang-model", dest="rollout_vllm_model", default="")
+    p.add_argument("--vllm-timeout", "--sglang-timeout", dest="vllm_timeout", type=int, default=120)
     p.add_argument("--rollout-max-steps", type=int, default=8)
     p.add_argument("--rollout-max-new-tokens", type=int, default=768)
     p.add_argument("--rollout-temperature", type=float, default=0.0)
@@ -704,7 +704,7 @@ def main() -> None:
     metrics_path = args.output_root / "metrics_history.jsonl"
     env = os.environ.copy()
 
-    base_model_for_rollout = args.rollout_sglang_model.strip()
+    base_model_for_rollout = args.rollout_vllm_model.strip()
 
     for it in range(1, args.num_iters + 1):
         iter_dir = args.output_root / f"iter_{it:03d}"
