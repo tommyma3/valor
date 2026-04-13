@@ -355,7 +355,20 @@ def _sglang_chat(
     response = requests.post(url, json=payload, headers=headers, timeout=timeout)
     response.raise_for_status()
     data = response.json()
-    return str(data["choices"][0]["message"]["content"]).strip()
+    content = data["choices"][0]["message"].get("content")
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_value = item.get("text")
+                if isinstance(text_value, str):
+                    text_parts.append(text_value)
+        return "".join(text_parts).strip()
+    return str(content).strip()
 
 
 def _read_queries_tsv(path: Path) -> list[tuple[str, str]]:
@@ -977,6 +990,7 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
             answer_text = ""
             tool_call_text = ""
             format_error = ""
+            previous_report = last_report
             for attempt in range(max(0, int(args.format_retries)) + 1):
                 prompt = (
                     base_prompt
@@ -1019,17 +1033,6 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                 "tool_call": tool_call_text,
             }
 
-            if report_text:
-                result_items.append(
-                    {
-                        "type": "reasoning",
-                        "tool_name": None,
-                        "arguments": None,
-                        "output": report_text,
-                    }
-                )
-                last_report = report_text
-
             if format_error:
                 # Recovery path: keep the old report and set tool_call to "Invalid tool call."
                 # with empty tool_output so the trajectory can still progress.
@@ -1038,8 +1041,10 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                     "parameters": {"message": "Invalid tool call."}
                 }
                 tool_call_text = json.dumps(error_payload, ensure_ascii=False)
-                # Keep the old report unchanged
-                if not last_report:
+                # Keep the old report unchanged.
+                if previous_report:
+                    trace_item["report"] = previous_report
+                else:
                     # If this is step 1 and there's no previous report, create a basic one
                     last_report = "Starting analysis."
                     trace_item["report"] = last_report
@@ -1051,12 +1056,24 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                             "output": last_report,
                         }
                     )
+                if previous_report:
+                    last_report = previous_report
                 trace_item["tool_call"] = tool_call_text
                 trace_item["format_error"] = format_error
                 trace_item["format_recovered"] = True
                 # Never treat malformed generations as final answers.
                 answer_text = ""
                 trace_item["answer"] = ""
+            elif report_text:
+                result_items.append(
+                    {
+                        "type": "reasoning",
+                        "tool_name": None,
+                        "arguments": None,
+                        "output": report_text,
+                    }
+                )
+                last_report = report_text
 
             if answer_text:
                 result_items.append(
