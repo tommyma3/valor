@@ -76,6 +76,21 @@ def _format_simple_prompt(question: str) -> str:
     return question
 
 
+def _build_messages(mode: str, prompt: str) -> list[dict[str, str]]:
+    if mode == "browsecomp":
+        return [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant that must follow the required XML format exactly.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ]
+    return [{"role": "user", "content": prompt}]
+
+
 def _filter_thinking_sections(text: str) -> str:
     filtered = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
     filtered = re.sub(r"^.*?</think>", "", filtered, flags=re.DOTALL | re.IGNORECASE)
@@ -146,63 +161,42 @@ def main() -> None:
         model.to(device)
     model.eval()
 
-    encoded = tokenizer(prompt, return_tensors="pt")
+    messages = _build_messages(args.mode, prompt)
+    rendered_prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    encoded = tokenizer(rendered_prompt, return_tensors="pt")
     if args.device_map is None:
         encoded = encoded.to(device)
 
-    # Run a forward pass to get raw logits from the model
     with torch.no_grad():
-        try:
-            policy_outputs = model(input_ids=encoded["input_ids"], attention_mask=encoded.get("attention_mask"))
-            lm_logits = policy_outputs.lm_logits
-            print("\n=== Raw LM Logits ===")
-            print(lm_logits)
-            print("\n=== LM Logits Shape ===")
-            print(tuple(lm_logits.shape))
-            try:
-                next_token_logits = lm_logits[0, -1, :]
-                topk = torch.topk(next_token_logits, k=min(20, next_token_logits.size(-1)))
-                print("\n=== Top Tokens by Logit (id, logit, token) ===")
-                for tid, val in zip(topk.indices.tolist(), topk.values.tolist()):
-                    print(tid, val, tokenizer.convert_ids_to_tokens(tid))
-                greedy_ids = lm_logits.argmax(dim=-1)[0].tolist()
-                print("\n=== Greedy token ids for input sequence ===")
-                print(greedy_ids)
-                print("\n=== Greedy tokens ===")
-                print(" ".join(tokenizer.convert_ids_to_tokens(greedy_ids)))
-            except Exception:
-                pass
-        except Exception:
-            # Some model wrappers may not support direct forward; ignore safely
-            lm_logits = None
+        generation_kwargs = {
+            "max_new_tokens": args.max_new_tokens,
+            "do_sample": args.temperature > 0,
+            "pad_token_id": tokenizer.pad_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+        }
+        if args.temperature > 0:
+            generation_kwargs["temperature"] = args.temperature
+            generation_kwargs["top_p"] = args.top_p
 
-        # Perform generation as before
         generated = model.backbone.generate(
             **encoded,
-            max_new_tokens=args.max_new_tokens,
-            do_sample=args.temperature > 0,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
+            **generation_kwargs,
         )
 
-    # Print raw model outputs for debugging/inspection
-    print("\n=== Raw Generated Tensor ===")
-    print(generated)
-    try:
-        print("\n=== Generated Token IDs ===")
-        print(generated[0].tolist())
-        print("\n=== Generated Tokens ===")
-        tokens = tokenizer.convert_ids_to_tokens(generated[0].tolist())
-        print(" ".join(tokens))
-    except Exception:
-        pass
-    full_text = tokenizer.decode(generated[0], skip_special_tokens=True)
-    completion = full_text[len(prompt) :].strip()
+    prompt_len = encoded["input_ids"].shape[-1]
+    completion_ids = generated[0][prompt_len:]
+    completion = tokenizer.decode(completion_ids, skip_special_tokens=True).strip()
 
     print("=== Prompt ===")
     print(prompt)
+
+    print("\n=== Rendered Prompt ===")
+    print(rendered_prompt)
 
     print("\n=== Completion ===")
     print(completion)
@@ -211,9 +205,11 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "prompt_tokens": int(encoded["input_ids"].shape[-1]),
+                "eos_token_id": tokenizer.eos_token_id,
+                "pad_token_id": tokenizer.pad_token_id,
+                "prompt_tokens": int(prompt_len),
                 "total_tokens": int(generated.shape[-1]),
-                "completion_tokens": int(generated.shape[-1] - encoded["input_ids"].shape[-1]),
+                "completion_tokens": int(generated.shape[-1] - prompt_len),
             },
             ensure_ascii=False,
             indent=2,
