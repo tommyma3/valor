@@ -161,6 +161,17 @@ def main() -> None:
             eos_token_id=tokenizer.eos_token_id,
         )
 
+    # Print raw model outputs for debugging/inspection
+    print("\n=== Raw Generated Tensor ===")
+    print(generated)
+    try:
+        print("\n=== Generated Token IDs ===")
+        print(generated[0].tolist())
+        print("\n=== Generated Tokens ===")
+        tokens = tokenizer.convert_ids_to_tokens(generated[0].tolist())
+        print(" ".join(tokens))
+    except Exception:
+        pass
     full_text = tokenizer.decode(generated[0], skip_special_tokens=True)
     completion = full_text[len(prompt) :].strip()
 
