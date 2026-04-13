@@ -3,6 +3,7 @@ import argparse
 import torch
 from transformers import AutoTokenizer
 
+from valor.generation import generate_local_completion
 from valor.model import PolicyModel
 from valor.prompts import State, format_state_prompt, parse_action
 
@@ -70,23 +71,21 @@ def main() -> None:
         advantage_label=advantage_label,
     )
 
-    enc = tokenizer(prompt, return_tensors="pt").to(device)
-    with torch.no_grad():
-        generated = model.backbone.generate(
-            **enc,
-            max_new_tokens=args.max_new_tokens,
-            do_sample=args.temperature > 0,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-
-    text = tokenizer.decode(generated[0], skip_special_tokens=True)
-    completion = text[len(prompt):]
+    result = generate_local_completion(
+        model,
+        tokenizer,
+        prompt,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        device=device,
+    )
+    completion = result.completion
 
     print("=== Prompt ===")
     print(prompt)
+    print("=== Rendered Prompt ===")
+    print(result.rendered_prompt)
     print("=== Completion ===")
     print(completion.strip())
 

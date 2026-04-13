@@ -7,6 +7,7 @@ import torch
 from transformers import AutoTokenizer
 from tqdm import tqdm
 
+from valor.generation import build_chat_messages, generate_local_completion
 from valor.io_utils import read_jsonl, write_jsonl
 from valor.model import PolicyModel
 from valor.prompts import State, format_state_prompt, parse_action
@@ -62,7 +63,7 @@ def _sglang_chat(
 
     payload = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": build_chat_messages(prompt),
         "temperature": temperature,
         "top_p": top_p,
         "max_tokens": max_tokens,
@@ -126,19 +127,15 @@ def main() -> None:
                 timeout=args.timeout,
             )
         else:
-            enc = tokenizer(prompt, return_tensors="pt").to(device)
-            with torch.no_grad():
-                generated = model.backbone.generate(
-                    **enc,
-                    max_new_tokens=args.max_new_tokens,
-                    do_sample=args.temperature > 0,
-                    temperature=args.temperature,
-                    top_p=args.top_p,
-                    pad_token_id=tokenizer.pad_token_id,
-                    eos_token_id=tokenizer.eos_token_id,
-                )
-            text = tokenizer.decode(generated[0], skip_special_tokens=True)
-            completion = text[len(prompt):]
+            completion = generate_local_completion(
+                model,
+                tokenizer,
+                prompt,
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                device=device,
+            ).completion
 
         try:
             action = parse_action(completion)

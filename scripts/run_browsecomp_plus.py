@@ -27,6 +27,11 @@ from prompts import (
     initial_instruction_prompt,
     instruction_prompt,
 )
+from valor.generation import (
+    STRICT_FORMAT_SYSTEM_PROMPT,
+    build_chat_messages,
+    generate_local_completion,
+)
 from valor.model import PolicyModel
 from valor.utils import set_seed
 
@@ -313,19 +318,16 @@ def _generate_completion(
     temperature: float,
     top_p: float,
 ) -> str:
-    encoded = tokenizer(prompt, return_tensors="pt").to(device)
-    with torch.no_grad():
-        generated = model.backbone.generate(
-            **encoded,
-            max_new_tokens=max_new_tokens,
-            do_sample=temperature > 0,
-            temperature=temperature,
-            top_p=top_p,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-    text = tokenizer.decode(generated[0], skip_special_tokens=True)
-    return text[len(prompt) :].strip()
+    return generate_local_completion(
+        model,
+        tokenizer,
+        prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        device=device,
+        system_prompt=STRICT_FORMAT_SYSTEM_PROMPT,
+    ).completion
 
 
 def _sglang_chat(
@@ -346,7 +348,10 @@ def _sglang_chat(
 
     payload = {
         "model": model_name,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": build_chat_messages(
+            prompt,
+            system_prompt=STRICT_FORMAT_SYSTEM_PROMPT,
+        ),
         "temperature": temperature,
         "top_p": top_p,
         "max_tokens": max_new_tokens,

@@ -7,6 +7,7 @@ from typing import Any
 import requests
 
 from prompts import browsecomp_initial_instruction_prompt
+from valor.generation import STRICT_FORMAT_SYSTEM_PROMPT, build_chat_messages
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,7 +93,7 @@ def _chat(
     headers: dict[str, str],
     timeout: int,
     model: str,
-    prompt: str,
+    messages: list[dict[str, str]],
     max_new_tokens: int,
     temperature: float,
     top_p: float,
@@ -100,7 +101,7 @@ def _chat(
     chat_url = base_url.rstrip("/") + "/v1/chat/completions"
     payload = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "temperature": temperature,
         "top_p": top_p,
         "max_tokens": max_new_tokens,
@@ -118,15 +119,20 @@ def main() -> None:
 
     if args.mode == "browsecomp":
         prompt = _format_browsecomp_prompt(args.question)
+        messages = build_chat_messages(
+            prompt,
+            system_prompt=STRICT_FORMAT_SYSTEM_PROMPT,
+        )
     else:
         prompt = _format_simple_prompt(args.question)
+        messages = build_chat_messages(prompt)
 
     response = _chat(
         base_url=args.url,
         headers=headers,
         timeout=args.timeout,
         model=args.model,
-        prompt=prompt,
+        messages=messages,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         top_p=args.top_p,

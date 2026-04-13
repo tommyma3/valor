@@ -2,12 +2,15 @@ import argparse
 import json
 import re
 from datetime import date
-from typing import Any
 
 import torch
 from transformers import AutoTokenizer
 
 from prompts import browsecomp_initial_instruction_prompt
+from valor.generation import (
+    STRICT_FORMAT_SYSTEM_PROMPT,
+    generate_local_completion,
+)
 from valor.model import PolicyModel
 
 
@@ -74,21 +77,6 @@ def _format_browsecomp_prompt(question: str) -> str:
 
 def _format_simple_prompt(question: str) -> str:
     return question
-
-
-def _build_messages(mode: str, prompt: str) -> list[dict[str, str]]:
-    if mode == "browsecomp":
-        return [
-            {
-                "role": "system",
-                "content": "You are a helpful assistant that must follow the required XML format exactly.",
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ]
-    return [{"role": "user", "content": prompt}]
 
 
 def _filter_thinking_sections(text: str) -> str:
@@ -161,42 +149,23 @@ def main() -> None:
         model.to(device)
     model.eval()
 
-    messages = _build_messages(args.mode, prompt)
-    rendered_prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
+    result = generate_local_completion(
+        model,
+        tokenizer,
+        prompt,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        device=device if args.device_map is None else None,
+        system_prompt=STRICT_FORMAT_SYSTEM_PROMPT if args.mode == "browsecomp" else None,
     )
-
-    encoded = tokenizer(rendered_prompt, return_tensors="pt")
-    if args.device_map is None:
-        encoded = encoded.to(device)
-
-    with torch.no_grad():
-        generation_kwargs = {
-            "max_new_tokens": args.max_new_tokens,
-            "do_sample": args.temperature > 0,
-            "pad_token_id": tokenizer.pad_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
-        }
-        if args.temperature > 0:
-            generation_kwargs["temperature"] = args.temperature
-            generation_kwargs["top_p"] = args.top_p
-
-        generated = model.backbone.generate(
-            **encoded,
-            **generation_kwargs,
-        )
-
-    prompt_len = encoded["input_ids"].shape[-1]
-    completion_ids = generated[0][prompt_len:]
-    completion = tokenizer.decode(completion_ids, skip_special_tokens=True).strip()
+    completion = result.completion
 
     print("=== Prompt ===")
     print(prompt)
 
     print("\n=== Rendered Prompt ===")
-    print(rendered_prompt)
+    print(result.rendered_prompt)
 
     print("\n=== Completion ===")
     print(completion)
@@ -207,9 +176,9 @@ def main() -> None:
             {
                 "eos_token_id": tokenizer.eos_token_id,
                 "pad_token_id": tokenizer.pad_token_id,
-                "prompt_tokens": int(prompt_len),
-                "total_tokens": int(generated.shape[-1]),
-                "completion_tokens": int(generated.shape[-1] - prompt_len),
+                "prompt_tokens": result.prompt_tokens,
+                "total_tokens": result.total_tokens,
+                "completion_tokens": result.completion_tokens,
             },
             ensure_ascii=False,
             indent=2,

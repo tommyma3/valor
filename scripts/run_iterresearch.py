@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from prompts import initial_instruction_prompt, instruction_prompt
+from valor.generation import STRICT_FORMAT_SYSTEM_PROMPT, generate_local_completion
 from valor.model import PolicyModel
 from valor.system_prompts import build_tools_prompt
 
@@ -166,19 +167,16 @@ def _generate_completion(
     temperature: float,
     top_p: float,
 ) -> str:
-    enc = tokenizer(prompt, return_tensors="pt").to(device)
-    with torch.no_grad():
-        generated = model.backbone.generate(
-            **enc,
-            max_new_tokens=max_new_tokens,
-            do_sample=temperature > 0,
-            temperature=temperature,
-            top_p=top_p,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-    text = tokenizer.decode(generated[0], skip_special_tokens=True)
-    return text[len(prompt) :].strip()
+    return generate_local_completion(
+        model,
+        tokenizer,
+        prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        device=device,
+        system_prompt=STRICT_FORMAT_SYSTEM_PROMPT,
+    ).completion
 
 
 def main() -> None:
