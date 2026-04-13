@@ -25,3 +25,31 @@ def write_jsonl(path: str | Path, records: Iterable[Dict[str, Any]]) -> None:
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False))
             f.write("\n")
+
+
+def append_jsonl(path: str | Path, record: Dict[str, Any]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False))
+        f.write("\n")
+
+
+def load_json(path: str | Path) -> Dict[str, Any] | None:
+    path = Path(path)
+    if not path.is_file():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object in {path}")
+    return data
+
+
+def save_json(path: str | Path, data: Dict[str, Any]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(path)

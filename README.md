@@ -12,12 +12,13 @@ The implementation mirrors the IterResearch flow (policy step -> environment ste
 
 ## Repository layout
 
-- `prompts/prompts.py`: IterResearch prompt templates (source of system prompt)
-- `valor/system_prompts.py`: loader for the system prompt used by VALOR
+- `prompts/prompts.py`: legacy IterResearch and BrowseComp prompt templates
+- `valor/system_prompts.py`: structured VALOR policy prompt and tool rendering helpers
 - `valor/prompts.py`: prompt templates and action parsing
-- `valor/model.py`: shared transformer + policy head + value head
+- `valor/model.py`: policy/value model wrappers for separate backbones
 - `valor/data.py`: datasets and collators
 - `valor/trajectory.py`: return computation and value label helpers
+- `valor/rollout_data.py`: shared rollout-to-transition and QA loading helpers
 - `scripts/collect_trajectories.py`: run the policy to produce actions
 - `scripts/compute_rewards.py`: assign binary rewards
 - `scripts/train_value.py`: train value head
@@ -169,6 +170,16 @@ uv run python scripts/collect_trajectories.py \
   --checkpoint checkpoints/policy_sft
 ```
 
+After advantage-conditioned policy training, extract the improved policy explicitly with:
+
+```bash
+uv run python scripts/collect_trajectories.py \
+  --states data/states.jsonl \
+  --output data/trajectories_improved.jsonl \
+  --checkpoint checkpoints/policy_adv \
+  --advantage-label positive
+```
+
 ### 3) Compute rewards
 
 By default this uses `final_answer` vs `gold_answer` on the final step in each trajectory.
@@ -220,11 +231,13 @@ uv run python scripts/test_llm.py \
 ## Implementation notes
 
 - The value head is a 2-class classifier with logits for `p(V=0|s)` and `p(V=1|s)`.
-- The policy and value heads share the same transformer backbone.
+- The policy and value models use separate backbones by design: `Qwen/Qwen3.5-35B-A3B` for policy and `Qwen/Qwen3.5-9B` for value.
 - Advantage conditioning is implemented by adding a textual indicator (`Advantage: positive/negative`) to the prompt.
+- Inference defaults to the behavior policy unless you pass `--advantage-label positive` to scripts that use the structured VALOR prompt.
 - Policy training uses 4-bit QLoRA adapters on top of the Qwen3.5-35B-A3B backbone.
 - The default LoRA targets cover both attention projections and MLP/expert projections: `q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,w1,w2,w3`.
 - When `--indicator-drop-prob` is non-zero, some samples are trained without the indicator to reduce forgetting.
+- Policy supervision masks the full `<THINK>...</THINK>` block so only memory-update and tool-query tokens are trained.
 - Use `--freeze-backbone` in `scripts/train_value.py` if you only want to learn the value head.
 
 ## Customizing the reward function

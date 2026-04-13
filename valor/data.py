@@ -128,7 +128,7 @@ def collate_policy(
     prompts: List[str] = []
     targets: List[str] = []
     prompt_char_lens: List[int] = []
-    think_spans: List[tuple[int, int]] = []
+    masked_think_spans: List[tuple[int, int]] = []
 
     for item in batch:
         prompt = _prompt_for_record(
@@ -139,13 +139,14 @@ def collate_policy(
         )
         action = item["action"]
         think_text = action.think.strip()
-        think_start = len(prompt) + len("<THINK>\n")
-        think_end = think_start + len(think_text)
+        think_block = "<THINK>\n" + think_text + "\n</THINK>\n"
+        think_start = len(prompt)
+        think_end = think_start + len(think_block)
 
         prompts.append(prompt)
         targets.append(format_action(action))
         prompt_char_lens.append(len(prompt))
-        think_spans.append((think_start, think_end))
+        masked_think_spans.append((think_start, think_end))
 
     full_text = [p + t for p, t in zip(prompts, targets)]
     tokenizer_kwargs = {
@@ -163,7 +164,7 @@ def collate_policy(
 
     if "offset_mapping" in enc:
         offset_mapping = enc.pop("offset_mapping")
-        for i, (prompt_char_len, think_span) in enumerate(zip(prompt_char_lens, think_spans)):
+        for i, (prompt_char_len, think_span) in enumerate(zip(prompt_char_lens, masked_think_spans)):
             think_start, think_end = think_span
             for j, (start, end) in enumerate(offset_mapping[i].tolist()):
                 if labels[i, j].item() == -100:
@@ -193,24 +194,21 @@ def collate_policy(
                 labels[i, :] = -100
                 continue
 
-            think_prefix = prompts[i] + "<THINK>\n"
-            think_content_prefix = think_prefix + batch[i]["action"].think.strip()
-            think_start_len = len(
-                tokenizer(
-                    think_prefix,
-                    truncation=True,
-                    max_length=max_length,
-                )["input_ids"]
+            think_block_text = (
+                prompts[i]
+                + "<THINK>\n"
+                + batch[i]["action"].think.strip()
+                + "\n</THINK>\n"
             )
             think_end_len = len(
                 tokenizer(
-                    think_content_prefix,
+                    think_block_text,
                     truncation=True,
                     max_length=max_length,
                 )["input_ids"]
             )
-            if think_end_len > think_start_len:
-                labels[i, think_start_len:think_end_len] = -100
+            if think_end_len > length:
+                labels[i, length:think_end_len] = -100
 
     return {
         "input_ids": enc.input_ids,

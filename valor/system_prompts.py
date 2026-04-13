@@ -6,17 +6,30 @@ import pkgutil
 from datetime import date
 from typing import List, Type
 
-try:
-    from prompts import initial_instruction_prompt as _SYSTEM_TEMPLATE
-except Exception:
-    _SYSTEM_TEMPLATE = None
+DEFAULT_SYSTEM_PROMPT = """You are a VALOR policy for value-guided context management.
 
-DEFAULT_SYSTEM_PROMPT = """You are a VALOR agent. Follow the input format and output a structured action.
+You receive one state s_t containing:
+- the question q
+- the current memory M_t
+- the previous tool query TU_{t-1}
+- the previous tool result TR_{t-1}
+- an optional advantage indicator
+
+Return exactly one structured action a_t with these top-level blocks:
+<THINK>...</THINK>
+<MEMORY>...</MEMORY>
+<TOOL>...</TOOL>
 
 Rules:
-- Only output the action in the required XML-like tags.
-- Keep the tool query concise and executable by the environment.
-- Update memory with only the information needed for future steps.
+- THINK is scratch reasoning and may be brief.
+- MEMORY must be the next memory state M_{t+1}. Keep only durable facts, evidence, and open questions needed later.
+- TOOL must be the next tool query TU_t. Use <NO_TOOL_CALL> only when no external action is needed.
+- Keep MEMORY compact. Do not copy the full question or previous tool output unless it is necessary state.
+- Keep TOOL concise and executable by the environment.
+- Output only the three required blocks and nothing else.
+
+Available tools:
+{tools}
 """
 
 
@@ -83,20 +96,17 @@ def render_system_prompt(
     tools: str = "",
     date_to_use: str | None = None,
 ) -> str:
-    template = _SYSTEM_TEMPLATE or DEFAULT_SYSTEM_PROMPT
+    template = DEFAULT_SYSTEM_PROMPT
     if date_to_use is None:
         date_to_use = date.today().isoformat()
 
     tools_text = tools.strip() if tools.strip() else build_tools_prompt()
 
-    try:
-        return template.format(
-            date_to_use=date_to_use,
-            question=question,
-            tools=tools_text,
-        )
-    except KeyError:
-        return template
+    return template.format(
+        date_to_use=date_to_use,
+        question=question,
+        tools=tools_text,
+    ).strip()
 
 
 SYSTEM_PROMPT = render_system_prompt()

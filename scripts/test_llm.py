@@ -7,6 +7,17 @@ from valor.model import PolicyModel
 from valor.prompts import State, format_state_prompt, parse_action
 
 
+def _resolve_advantage_label(raw_value: str) -> int | None:
+    normalized = raw_value.strip().lower()
+    if normalized == "positive":
+        return 1
+    if normalized == "negative":
+        return 0
+    if normalized == "none":
+        return None
+    raise ValueError(f"Unsupported advantage label: {raw_value}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Quick LLM sanity test.")
     parser.add_argument("--checkpoint", required=True, help="Model checkpoint directory.")
@@ -18,11 +29,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=192)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.9)
+    parser.add_argument(
+        "--advantage-label",
+        choices=["positive", "negative", "none"],
+        default="none",
+        help="Condition generation on an advantage indicator. Use 'positive' to inspect the improved policy.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    advantage_label = _resolve_advantage_label(args.advantage_label)
 
     tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -46,7 +64,11 @@ def main() -> None:
         prev_tool_query=args.prev_tool_query,
         prev_tool_result=args.prev_tool_result,
     )
-    prompt = format_state_prompt(state)
+    prompt = format_state_prompt(
+        state,
+        include_advantage=advantage_label is not None,
+        advantage_label=advantage_label,
+    )
 
     enc = tokenizer(prompt, return_tensors="pt").to(device)
     with torch.no_grad():

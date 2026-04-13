@@ -3,29 +3,28 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import json
 import logging
 import subprocess
 import sys
-from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from valor.rl_utils import (
     configure_logger,
-    extract_final_answer,
     load_json,
     load_query_ids,
-    normalize_text,
     read_jsonl,
-    safe_query_id,
     save_json,
-    utc_now_iso,
     write_jsonl,
     write_query_ids,
     write_queries_tsv,
+)
+from valor.rollout_data import (
+    QAPair,
+    assign_terminal_binary_rewards,
+    build_transition_dataset_from_rollouts,
+    load_browsecomp_qa_pairs as shared_load_browsecomp_qa_pairs,
+    load_webshaper_qa_pairs as shared_load_webshaper_qa_pairs,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -52,62 +51,9 @@ def run_command(cmd: list[str], logger: logging.Logger, cwd: Path | None = None)
         raise RuntimeError(f"Command failed with exit code {return_code}: {' '.join(cmd)}")
 
 
-@dataclass
-class QAPair:
-    query_id: str
-    query: str
-    answer: str
-
-
 def load_browsecomp_qa_pairs(queries_tsv: Path, answers_jsonl: Path) -> dict[str, QAPair]:
     """Load QA pairs from BrowseComp format."""
-    queries: dict[str, str] = {}
-    with queries_tsv.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.reader(f, delimiter="\t")
-        for row in reader:
-            if len(row) < 2:
-                continue
-            qid = row[0].strip()
-            query = row[1].strip()
-            if qid and query:
-                queries[qid] = query
-
-    answers_raw = read_jsonl(answers_jsonl)
-    answers: dict[str, str] = {}
-    for rec in answers_raw:
-        qid = str(rec.get("query_id", "")).strip()
-        answer = str(rec.get("answer", "")).strip()
-        if qid and answer:
-            answers[qid] = answer
-
-    qa_pairs: dict[str, QAPair] = {}
-    for qid, query in queries.items():
-        answer = answers.get(qid)
-        if answer is None:
-            continue
-        qa_pairs[qid] = QAPair(query_id=qid, query=query, answer=answer)
-    return qa_pairs
-
-
-def normalize_answer_field(value: Any) -> str:
-    """Normalize answer field from various formats."""
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (int, float, bool)):
-        return str(value).strip()
-    if isinstance(value, list):
-        parts = [normalize_answer_field(item) for item in value]
-        return " ".join(part for part in parts if part).strip()
-    if isinstance(value, dict):
-        for key in ("answer", "text", "content", "output", "value", "final_answer"):
-            if key in value:
-                normalized = normalize_answer_field(value.get(key))
-                if normalized:
-                    return normalized
-    return ""
-
+    return shared_load_browsecomp_qa_pairs(queries_tsv, answers_jsonl)
 
 def load_webshaper_qa_pairs(
     dataset_name: str,
@@ -118,51 +64,14 @@ def load_webshaper_qa_pairs(
     logger: logging.Logger,
 ) -> dict[str, QAPair]:
     """Load QA pairs from WebShaper dataset."""
-    try:
-        from datasets import load_dataset
-    except ImportError as exc:
-        raise ImportError(
-            "The `datasets` package is required for loading WebShaper data. "
-            "Install it with: uv pip install datasets"
-        ) from exc
-
-    logger.info("Loading dataset from Hugging Face: %s (split=%s)", dataset_name, split)
-    dataset = load_dataset(dataset_name, split=split)
-
-    qa_pairs: dict[str, QAPair] = {}
-    skipped = 0
-
-    for idx, row in enumerate(dataset):
-        if not isinstance(row, dict):
-            skipped += 1
-            continue
-
-        query = str(row.get(question_field, "")).strip()
-        answer = normalize_answer_field(row.get(answer_field))
-        if not query or not answer:
-            skipped += 1
-            continue
-
-        raw_query_id = ""
-        if id_field:
-            raw_query_id = str(row.get(id_field, "")).strip()
-        if not raw_query_id:
-            raw_query_id = f"webshaper_{idx:07d}"
-
-        query_id = safe_query_id(raw_query_id)
-        if not query_id:
-            query_id = f"webshaper_{idx:07d}"
-        if query_id in qa_pairs:
-            query_id = f"{query_id}_{idx:07d}"
-
-        qa_pairs[query_id] = QAPair(query_id=query_id, query=query, answer=answer)
-
-    logger.info(
-        "Loaded WebShaper QA pairs: kept=%d skipped=%d (missing/invalid fields)",
-        len(qa_pairs),
-        skipped,
+    return shared_load_webshaper_qa_pairs(
+        dataset_name=dataset_name,
+        split=split,
+        question_field=question_field,
+        answer_field=answer_field,
+        id_field=id_field,
+        logger=logger,
     )
-    return qa_pairs
 
 
 def build_rollout_command(
@@ -281,131 +190,7 @@ def build_dataset_from_rollouts(
     logger: logging.Logger,
 ) -> dict[str, Any]:
     """Convert rollout traces to RL transitions dataset."""
-    trace_dir = rollout_dir / "traces"
-    if not trace_dir.is_dir():
-        raise FileNotFoundError(
-            f"Trace directory not found: {trace_dir}. Ensure rollouts were run with --save-traces."
-        )
-
-    run_by_qid: dict[str, dict[str, Any]] = {}
-    for run_path in rollout_dir.glob("run_*.json"):
-        try:
-            with run_path.open("r", encoding="utf-8") as f:
-                run_obj = json.load(f)
-            qid = str(run_obj.get("query_id", "")).strip()
-            if qid:
-                run_by_qid[qid] = run_obj
-        except Exception:
-            continue
-
-    transitions: list[dict[str, Any]] = []
-    num_trajectories = 0
-    num_completed = 0
-
-    for trace_path in sorted(trace_dir.glob("trace_*.json")):
-        with trace_path.open("r", encoding="utf-8") as f:
-            trace_obj = json.load(f)
-
-        query_id = str(trace_obj.get("query_id", "")).strip()
-        if not query_id:
-            continue
-        qa = qa_pairs.get(query_id)
-        if qa is None:
-            continue
-
-        steps = trace_obj.get("steps", [])
-        if not isinstance(steps, list) or len(steps) == 0:
-            continue
-
-        run_obj = run_by_qid.get(query_id, {})
-        final_answer = extract_final_answer(run_obj)
-        if not final_answer:
-            for step in reversed(steps):
-                answer = str(step.get("answer", "")).strip()
-                if answer:
-                    final_answer = answer
-                    break
-
-        memory = ""
-        prev_tool_query = ""
-        prev_tool_result = ""
-        trajectory_records: list[dict[str, Any]] = []
-
-        for t, step in enumerate(steps):
-            report = str(step.get("report", "")).strip()
-            tool_name = str(step.get("tool_name", "")).strip()
-            tool_params = step.get("tool_params", {})
-            raw_tool_call = str(step.get("tool_call", "")).strip()
-
-            if tool_name:
-                action_tool_query = json.dumps(
-                    {"tool": tool_name, "parameters": tool_params},
-                    ensure_ascii=False,
-                )
-            elif raw_tool_call:
-                action_tool_query = raw_tool_call
-            else:
-                action_tool_query = "<NO_TOOL_CALL>"
-
-            action_think = report if report else "No report."
-            action_memory_update = report if report else (memory if memory else "<empty>")
-
-            trajectory_records.append(
-                {
-                    "trajectory_id": query_id,
-                    "t": t,
-                    "question": qa.query,
-                    "memory": memory,
-                    "prev_tool_query": prev_tool_query,
-                    "prev_tool_result": prev_tool_result,
-                    "action_think": action_think,
-                    "action_memory_update": action_memory_update,
-                    "action_tool_query": action_tool_query,
-                }
-            )
-
-            if report:
-                memory = report
-
-            tool_output = str(step.get("tool_output", "")).strip()
-            tool_error = str(step.get("tool_error", "")).strip()
-            observed = tool_output if tool_output else tool_error
-            if observed or action_tool_query != "<NO_TOOL_CALL>":
-                prev_tool_query = action_tool_query
-                prev_tool_result = observed
-
-        if len(trajectory_records) == 0:
-            continue
-
-        trajectory_records[-1]["final_answer"] = final_answer
-        trajectory_records[-1]["gold_answer"] = qa.answer
-
-        status = str(run_obj.get("status", trace_obj.get("status", ""))).strip().lower()
-        if status == "completed":
-            num_completed += 1
-
-        transitions.extend(trajectory_records)
-        num_trajectories += 1
-
-    if len(transitions) == 0:
-        raise ValueError(
-            f"No transitions were created from rollout traces in {trace_dir}."
-        )
-
-    write_jsonl(output_path, transitions)
-    stats = {
-        "num_trajectories": num_trajectories,
-        "num_completed": num_completed,
-        "num_transitions": len(transitions),
-        "output": str(output_path),
-    }
-    logger.info(
-        "Built dataset: trajectories=%d completed=%d transitions=%d",
-        num_trajectories,
-        num_completed,
-        len(transitions),
-    )
-    return stats
+    return build_transition_dataset_from_rollouts(rollout_dir, qa_pairs, output_path, logger)
 
 
 def compute_rewards(
@@ -416,22 +201,7 @@ def compute_rewards(
     """Compute binary rewards for trajectories."""
     logger.info("Computing rewards from %s", trajectories_path)
     records = read_jsonl(trajectories_path)
-
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for idx, record in enumerate(records):
-        key = record.get("trajectory_id", str(idx))
-        grouped[key].append(record)
-
-    for traj in grouped.values():
-        if "t" in traj[0]:
-            traj.sort(key=lambda r: r["t"])
-        for record in traj:
-            record["reward"] = 0
-        final = traj[-1]
-        pred = normalize_text(str(final.get("final_answer", "")))
-        gold = normalize_text(str(final.get("gold_answer", "")))
-        final["reward"] = 1 if pred and pred == gold else 0
-
+    assign_terminal_binary_rewards(records)
     write_jsonl(output_path, records)
     logger.info("Rewards computed: %s", output_path)
 

@@ -6,53 +6,29 @@ import json
 import logging
 import subprocess
 import sys
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def utc_now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
-
-
-def normalize_text(text: str) -> str:
-    return " ".join(text.strip().lower().split())
-
-
-def safe_query_id(query_id: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in query_id)
-
-
-def configure_logger(output_root: Path) -> logging.Logger:
-    logs_dir = output_root / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = logs_dir / f"train_loop_{stamp}.log"
-
-    logger = logging.getLogger("valor.browsecomp_rl")
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-    logger.propagate = False
-
-    formatter = logging.Formatter(
-        fmt="%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    stream = logging.StreamHandler()
-    stream.setFormatter(formatter)
-    logger.addHandler(stream)
-
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    logger.info("Training loop logs: %s", log_path)
-    return logger
+from valor.rl_utils import (
+    append_jsonl,
+    configure_logger,
+    extract_final_answer,
+    load_json,
+    load_query_ids,
+    normalize_text,
+    read_jsonl,
+    save_json,
+    utc_now_iso,
+    write_query_ids,
+)
+from valor.rollout_data import (
+    QAPair,
+    assign_terminal_binary_rewards,
+    build_transition_dataset_from_rollouts,
+    load_browsecomp_qa_pairs as shared_load_browsecomp_qa_pairs,
+    load_webshaper_qa_pairs as shared_load_webshaper_qa_pairs,
+)
 
 
 def run_command(cmd: list[str], logger: logging.Logger, cwd: Path | None = None) -> None:
@@ -75,92 +51,8 @@ def run_command(cmd: list[str], logger: logging.Logger, cwd: Path | None = None)
         raise RuntimeError(f"Command failed with exit code {return_code}: {' '.join(cmd)}")
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"Invalid JSON on line {line_num} in {path}") from exc
-            if not isinstance(obj, dict):
-                raise ValueError(f"Expected object JSON on line {line_num} in {path}")
-            records.append(obj)
-    return records
-
-
-def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for record in records:
-            f.write(json.dumps(record, ensure_ascii=False))
-            f.write("\n")
-
-
-def append_jsonl(path: Path, record: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False))
-        f.write("\n")
-
-
-@dataclass
-class QAPair:
-    query_id: str
-    query: str
-    answer: str
-
-
 def load_browsecomp_qa_pairs(queries_tsv: Path, answers_jsonl: Path) -> dict[str, QAPair]:
-    queries: dict[str, str] = {}
-    with queries_tsv.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.reader(f, delimiter="\t")
-        for row in reader:
-            if len(row) < 2:
-                continue
-            qid = row[0].strip()
-            query = row[1].strip()
-            if qid and query:
-                queries[qid] = query
-
-    answers_raw = read_jsonl(answers_jsonl)
-    answers: dict[str, str] = {}
-    for rec in answers_raw:
-        qid = str(rec.get("query_id", "")).strip()
-        answer = str(rec.get("answer", "")).strip()
-        if qid and answer:
-            answers[qid] = answer
-
-    qa_pairs: dict[str, QAPair] = {}
-    for qid, query in queries.items():
-        answer = answers.get(qid)
-        if answer is None:
-            continue
-        qa_pairs[qid] = QAPair(query_id=qid, query=query, answer=answer)
-    return qa_pairs
-
-
-def normalize_answer_field(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (int, float, bool)):
-        return str(value).strip()
-    if isinstance(value, list):
-        parts = [normalize_answer_field(item) for item in value]
-        return " ".join(part for part in parts if part).strip()
-    if isinstance(value, dict):
-        for key in ("answer", "text", "content", "output", "value", "final_answer"):
-            if key in value:
-                normalized = normalize_answer_field(value.get(key))
-                if normalized:
-                    return normalized
-    return ""
-
+    return shared_load_browsecomp_qa_pairs(queries_tsv, answers_jsonl)
 
 def load_webshaper_qa_pairs(
     dataset_name: str,
@@ -170,69 +62,14 @@ def load_webshaper_qa_pairs(
     id_field: str | None,
     logger: logging.Logger,
 ) -> dict[str, QAPair]:
-    try:
-        from datasets import load_dataset
-    except ImportError as exc:
-        raise ImportError(
-            "The `datasets` package is required for --train-qa-source=webshaper. "
-            "Install it with: uv pip install datasets"
-        ) from exc
-
-    logger.info("Loading training dataset from Hugging Face: %s (split=%s)", dataset_name, split)
-    dataset = load_dataset(dataset_name, split=split)
-
-    qa_pairs: dict[str, QAPair] = {}
-    skipped = 0
-
-    for idx, row in enumerate(dataset):
-        if not isinstance(row, dict):
-            skipped += 1
-            continue
-
-        query = str(row.get(question_field, "")).strip()
-        answer = normalize_answer_field(row.get(answer_field))
-        if not query or not answer:
-            skipped += 1
-            continue
-
-        raw_query_id = ""
-        if id_field:
-            raw_query_id = str(row.get(id_field, "")).strip()
-        if not raw_query_id:
-            raw_query_id = f"webshaper_{idx:07d}"
-
-        query_id = safe_query_id(raw_query_id)
-        if not query_id:
-            query_id = f"webshaper_{idx:07d}"
-        if query_id in qa_pairs:
-            query_id = f"{query_id}_{idx:07d}"
-
-        qa_pairs[query_id] = QAPair(query_id=query_id, query=query, answer=answer)
-
-    logger.info(
-        "Loaded WebShaper QA pairs: kept=%d skipped=%d (missing/invalid fields)",
-        len(qa_pairs),
-        skipped,
+    return shared_load_webshaper_qa_pairs(
+        dataset_name=dataset_name,
+        split=split,
+        question_field=question_field,
+        answer_field=answer_field,
+        id_field=id_field,
+        logger=logger,
     )
-    return qa_pairs
-
-
-def load_query_ids(path: Path) -> list[str]:
-    ids: list[str] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            qid = line.strip()
-            if qid:
-                ids.append(qid)
-    return ids
-
-
-def write_query_ids(path: Path, query_ids: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for qid in query_ids:
-            f.write(qid)
-            f.write("\n")
 
 
 def write_queries_tsv(path: Path, query_ids: list[str], qa_pairs: dict[str, QAPair]) -> None:
@@ -244,17 +81,6 @@ def write_queries_tsv(path: Path, query_ids: list[str], qa_pairs: dict[str, QAPa
             if qa is None:
                 continue
             writer.writerow([qid, qa.query])
-
-
-def extract_final_answer(run_record: dict[str, Any]) -> str:
-    result = run_record.get("result", [])
-    if not isinstance(result, list):
-        return ""
-    for item in reversed(result):
-        if isinstance(item, dict) and item.get("type") == "output_text":
-            return str(item.get("output", "")).strip()
-    return ""
-
 
 def build_rollout_command(
     args: argparse.Namespace,
@@ -366,132 +192,7 @@ def build_dataset_from_rollouts(
     output_path: Path,
     logger: logging.Logger,
 ) -> dict[str, Any]:
-    trace_dir = rollout_dir / "traces"
-    if not trace_dir.is_dir():
-        raise FileNotFoundError(
-            f"Trace directory not found: {trace_dir}. Ensure rollouts were run with --save-traces."
-        )
-
-    run_by_qid: dict[str, dict[str, Any]] = {}
-    for run_path in rollout_dir.glob("run_*.json"):
-        try:
-            with run_path.open("r", encoding="utf-8") as f:
-                run_obj = json.load(f)
-            qid = str(run_obj.get("query_id", "")).strip()
-            if qid:
-                run_by_qid[qid] = run_obj
-        except Exception:
-            continue
-
-    transitions: list[dict[str, Any]] = []
-    num_trajectories = 0
-    num_completed = 0
-
-    for trace_path in sorted(trace_dir.glob("trace_*.json")):
-        with trace_path.open("r", encoding="utf-8") as f:
-            trace_obj = json.load(f)
-
-        query_id = str(trace_obj.get("query_id", "")).strip()
-        if not query_id:
-            continue
-        qa = qa_pairs.get(query_id)
-        if qa is None:
-            continue
-
-        steps = trace_obj.get("steps", [])
-        if not isinstance(steps, list) or len(steps) == 0:
-            continue
-
-        run_obj = run_by_qid.get(query_id, {})
-        final_answer = extract_final_answer(run_obj)
-        if not final_answer:
-            # Fallback to trace answer on the last step containing one.
-            for step in reversed(steps):
-                answer = str(step.get("answer", "")).strip()
-                if answer:
-                    final_answer = answer
-                    break
-
-        memory = ""
-        prev_tool_query = ""
-        prev_tool_result = ""
-        trajectory_records: list[dict[str, Any]] = []
-
-        for t, step in enumerate(steps):
-            report = str(step.get("report", "")).strip()
-            tool_name = str(step.get("tool_name", "")).strip()
-            tool_params = step.get("tool_params", {})
-            raw_tool_call = str(step.get("tool_call", "")).strip()
-
-            if tool_name:
-                action_tool_query = json.dumps(
-                    {"tool": tool_name, "parameters": tool_params},
-                    ensure_ascii=False,
-                )
-            elif raw_tool_call:
-                action_tool_query = raw_tool_call
-            else:
-                action_tool_query = "<NO_TOOL_CALL>"
-
-            action_think = report if report else "No report."
-            action_memory_update = report if report else (memory if memory else "<empty>")
-
-            trajectory_records.append(
-                {
-                    "trajectory_id": query_id,
-                    "t": t,
-                    "question": qa.query,
-                    "memory": memory,
-                    "prev_tool_query": prev_tool_query,
-                    "prev_tool_result": prev_tool_result,
-                    "action_think": action_think,
-                    "action_memory_update": action_memory_update,
-                    "action_tool_query": action_tool_query,
-                }
-            )
-
-            if report:
-                memory = report
-
-            tool_output = str(step.get("tool_output", "")).strip()
-            tool_error = str(step.get("tool_error", "")).strip()
-            observed = tool_output if tool_output else tool_error
-            if observed or action_tool_query != "<NO_TOOL_CALL>":
-                prev_tool_query = action_tool_query
-                prev_tool_result = observed
-
-        if len(trajectory_records) == 0:
-            continue
-
-        trajectory_records[-1]["final_answer"] = final_answer
-        trajectory_records[-1]["gold_answer"] = qa.answer
-
-        status = str(run_obj.get("status", trace_obj.get("status", ""))).strip().lower()
-        if status == "completed":
-            num_completed += 1
-
-        transitions.extend(trajectory_records)
-        num_trajectories += 1
-
-    if len(transitions) == 0:
-        raise ValueError(
-            f"No transitions were created from rollout traces in {trace_dir}."
-        )
-
-    write_jsonl(output_path, transitions)
-    stats = {
-        "num_trajectories": num_trajectories,
-        "num_completed": num_completed,
-        "num_transitions": len(transitions),
-        "output": str(output_path),
-    }
-    logger.info(
-        "Built RL dataset: trajectories=%d completed=%d transitions=%d",
-        num_trajectories,
-        num_completed,
-        len(transitions),
-    )
-    return stats
+    return build_transition_dataset_from_rollouts(rollout_dir, qa_pairs, output_path, logger)
 
 
 def compute_em_score(
@@ -806,18 +507,11 @@ def select_query_ids(
 
 
 def load_state(path: Path) -> dict[str, Any] | None:
-    if not path.is_file():
-        return None
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    return load_json(path)
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
-    tmp.replace(path)
+    save_json(path, state)
 
 
 def main() -> None:

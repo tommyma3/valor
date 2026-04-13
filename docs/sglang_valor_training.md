@@ -76,6 +76,8 @@ What this does per iteration:
 6. train policy model (`Qwen/Qwen3.5-35B-A3B` backbone, QLoRA adapters over attention + MLP/expert projections)
 7. evaluate on BrowseComp-Plus and log score
 
+Note: the revised VALOR plan uses separate policy and value models. The RL loop keeps that split: policy checkpoints come from `Qwen/Qwen3.5-35B-A3B`, while value checkpoints come from `Qwen/Qwen3.5-9B`.
+
 ## 4) Multi-Iteration With Updated Policy Checkpoints
 
 If your SGLang server is serving one fixed model, you should run **one iteration at a time** and restart SGLang with the latest policy checkpoint.

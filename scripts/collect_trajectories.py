@@ -12,6 +12,17 @@ from valor.model import PolicyModel
 from valor.prompts import State, format_state_prompt, parse_action
 
 
+def _resolve_advantage_label(raw_value: str) -> int | None:
+    normalized = raw_value.strip().lower()
+    if normalized == "positive":
+        return 1
+    if normalized == "negative":
+        return 0
+    if normalized == "none":
+        return None
+    raise ValueError(f"Unsupported advantage label: {raw_value}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect trajectories with the policy model.")
     parser.add_argument("--states", required=True, help="Input states jsonl.")
@@ -25,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sglang-model", default="", help="Model name for SGLang server.")
     parser.add_argument("--sglang-api-key", default=os.getenv("SGLANG_API_KEY", ""))
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument(
+        "--advantage-label",
+        choices=["positive", "negative", "none"],
+        default="none",
+        help="Condition generation on an advantage indicator. Use 'positive' to sample from the improved policy.",
+    )
     return parser.parse_args()
 
 
@@ -59,6 +76,7 @@ def _sglang_chat(
 
 def main() -> None:
     args = parse_args()
+    advantage_label = _resolve_advantage_label(args.advantage_label)
 
     records = read_jsonl(args.states)
     use_sglang = bool(args.sglang_url)
@@ -90,7 +108,11 @@ def main() -> None:
             prev_tool_query=record.get("prev_tool_query", ""),
             prev_tool_result=record.get("prev_tool_result", ""),
         )
-        prompt = format_state_prompt(state)
+        prompt = format_state_prompt(
+            state,
+            include_advantage=advantage_label is not None,
+            advantage_label=advantage_label,
+        )
 
         if use_sglang:
             completion = _sglang_chat(

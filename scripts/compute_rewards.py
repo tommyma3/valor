@@ -1,14 +1,8 @@
 import argparse
-from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Any
 
 from valor.io_utils import read_jsonl, write_jsonl
-
-
-def normalize(text: str) -> str:
-    return " ".join(text.strip().lower().split())
-
+from valor.rollout_data import assign_terminal_binary_rewards
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compute binary rewards.")
@@ -24,21 +18,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     records = read_jsonl(args.data)
-
-    grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for idx, record in enumerate(records):
-        key = record.get(args.trajectory_field, str(idx))
-        grouped[key].append(record)
-
-    for traj in grouped.values():
-        if args.timestep_field in traj[0]:
-            traj.sort(key=lambda r: r[args.timestep_field])
-        for record in traj:
-            record["reward"] = 0
-        final = traj[-1]
-        pred = normalize(str(final.get(args.final_answer_field, "")))
-        gold = normalize(str(final.get(args.gold_answer_field, "")))
-        final["reward"] = 1 if pred and pred == gold else 0
+    assign_terminal_binary_rewards(
+        records,
+        trajectory_field=args.trajectory_field,
+        timestep_field=args.timestep_field,
+        final_answer_field=args.final_answer_field,
+        gold_answer_field=args.gold_answer_field,
+    )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
