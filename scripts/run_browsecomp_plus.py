@@ -355,13 +355,21 @@ def _sglang_chat(
         "temperature": temperature,
         "top_p": top_p,
         "max_tokens": max_new_tokens,
+        # We parse the raw tagged text ourselves. If SGLang splits Qwen-style
+        # thinking into `reasoning_content`, `message.content` can end up empty
+        # and every rollout step looks malformed.
+        "separate_reasoning": False,
     }
 
     response = requests.post(url, json=payload, headers=headers, timeout=timeout)
     response.raise_for_status()
     data = response.json()
-    content = data["choices"][0]["message"].get("content")
+    message = data["choices"][0]["message"]
+    content = message.get("content")
     if content is None:
+        reasoning_content = message.get("reasoning_content")
+        if isinstance(reasoning_content, str):
+            return reasoning_content.strip()
         return ""
     if isinstance(content, str):
         return content.strip()
