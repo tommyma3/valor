@@ -21,7 +21,7 @@ from valor.system_prompts import build_tools_prompt
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the IterResearch prompt with a local model.")
-    parser.add_argument("--model-path", default="model/Qwen3.5-35B-A3B")
+    parser.add_argument("--model-path", default="model/Qwen3.5-9B")
     parser.add_argument("--question", required=True)
     parser.add_argument("--date", default=None)
     parser.add_argument("--max-new-tokens", type=int, default=512)

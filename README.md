@@ -23,7 +23,7 @@ The implementation mirrors the IterResearch flow (policy step -> environment ste
 - `scripts/compute_rewards.py`: assign binary rewards
 - `scripts/train_value.py`: train value head
 - `scripts/compute_advantages.py`: compute advantages + labels
-- `scripts/train_policy.py`: train policy with QLoRA advantage conditioning
+- `scripts/train_policy.py`: train policy with full fine-tuning and advantage conditioning
 - `scripts/generate_sft.py`: generate SFT data via Kimi API
 - `scripts/run_iterresearch.py`: run the IterResearch prompt on a local model
 - `scripts/test_llm.py`: quick generation sanity check
@@ -130,9 +130,9 @@ If you already have a SGLang server running, point `collect_trajectories.py` at 
 uv run python scripts/collect_trajectories.py \
   --states data/states.jsonl \
   --output data/trajectories.jsonl \
-  --checkpoint Qwen/Qwen3.5-35B-A3B \
+  --checkpoint Qwen/Qwen3.5-9B \
   --sglang-url http://127.0.0.1:8000 \
-  --sglang-model Qwen/Qwen3.5-35B-A3B
+  --sglang-model Qwen/Qwen3.5-9B
 ```
 
 Optionally set `SGLANG_API_KEY` if your server requires auth.
@@ -143,7 +143,7 @@ Run the compact IterResearch prompt directly against the base model to see the r
 
 ```bash
 uv run python scripts/run_iterresearch.py \
-  --model-path model/Qwen3.5-35B-A3B \
+  --model-path model/Qwen3.5-9B \
   --question "What are the key steps in this problem?"
 ```
 
@@ -151,13 +151,13 @@ uv run python scripts/run_iterresearch.py \
 
 ### 1) (Optional) Pretrain with IterResearch-style SFT
 
-Use `scripts/train_policy.py` with `--alpha 0` to warm-start the model on supervised data. The policy trainer now uses QLoRA by default for Qwen3.5-35B-A3B.
+Use `scripts/train_policy.py` with `--alpha 0` to warm-start the model on supervised data. The policy trainer now full-fine-tunes the policy backbone directly.
 
 ```bash
 uv run python scripts/train_policy.py \
   --data data/sft.jsonl \
   --output checkpoints/policy_sft \
-  --backbone Qwen/Qwen3.5-35B-A3B \
+  --backbone Qwen/Qwen3.5-9B \
   --alpha 0
 ```
 
@@ -231,11 +231,11 @@ uv run python scripts/test_llm.py \
 ## Implementation notes
 
 - The value head is a 2-class classifier with logits for `p(V=0|s)` and `p(V=1|s)`.
-- The policy and value models use separate backbones by design: `Qwen/Qwen3.5-35B-A3B` for policy and `Qwen/Qwen3.5-9B` for value.
+- The policy and value models use separate backbones by design. The current default for both is `Qwen/Qwen3.5-9B`, though you can still override them independently.
 - Advantage conditioning is implemented by adding a textual indicator (`Advantage: positive/negative`) to the prompt.
 - Inference defaults to the behavior policy unless you pass `--advantage-label positive` to scripts that use the structured VALOR prompt.
-- Policy training uses 4-bit QLoRA adapters on top of the Qwen3.5-35B-A3B backbone.
-- The default LoRA targets cover both attention projections and MLP/expert projections: `q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,w1,w2,w3`.
+- Policy training now updates the policy backbone directly instead of training LoRA adapters.
+- Use `--torch-dtype` in `scripts/train_policy.py` to control policy-training dtype.
 - When `--indicator-drop-prob` is non-zero, some samples are trained without the indicator to reduce forgetting.
 - Policy supervision masks the full `<THINK>...</THINK>` block so only memory-update and tool-query tokens are trained.
 - Use `--freeze-backbone` in `scripts/train_value.py` if you only want to learn the value head.
@@ -246,4 +246,4 @@ The reward script is intentionally simple. For your environment, replace the log
 
 ## Large model usage
 
-Policy training now assumes QLoRA for `Qwen/Qwen3.5-35B-A3B`. Install `bitsandbytes` alongside `torch`, `transformers`, and `peft` on the remote server, and use `--device-map auto` when the adapter training needs multiple GPUs. Saved policy checkpoints are PEFT adapter directories, and the local inference scripts automatically reconstruct `base model + adapter` when loading them.
+Policy training now saves full policy checkpoints for the default backbone `Qwen/Qwen3.5-9B`. Use `--device-map auto` when training needs multiple GPUs.

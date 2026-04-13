@@ -59,7 +59,7 @@ def debug_collate(data_path, max_length=2048, num_batches=5):
 
     records = [json.loads(line) for line in open(data_path)]
     dataset = PolicyDataset(records)
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-35B-A3B", trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-9B", trust_remote_code=True)
 
     print(f"Dataset size: {len(dataset)}")
 
@@ -99,11 +99,11 @@ def debug_model_forward(data_path, max_length=2048, device='cuda'):
 
     records = [json.loads(line) for line in open(data_path)]
     dataset = PolicyDataset(records)
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-35B-A3B", trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-9B", trust_remote_code=True)
 
     print(f"Loading model to {device}...")
     model = PolicyModel(
-        "Qwen/Qwen3.5-35B-A3B",
+        "Qwen/Qwen3.5-9B",
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,

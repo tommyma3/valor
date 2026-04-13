@@ -30,7 +30,7 @@ Start an OpenAI-compatible SGLang server (example on port `8000`):
 
 ```bash
 python -m sglang.launch_server \
-  --model-path Qwen/Qwen3.5-35B-A3B \
+  --model-path Qwen/Qwen3.5-9B \
   --host 0.0.0.0 \
   --port 8000
 ```
@@ -48,16 +48,16 @@ From repo root:
 ```bash
 uv run python scripts/train_browsecomp_plus_rl.py \
   --browsecomp-root external/BrowseComp-Plus \
-  --output-root runs/browsecomp_plus/rl_qwen35b_sglang \
+  --output-root runs/browsecomp_plus/rl_qwen9b_sglang \
   --searcher-type faiss \
   --index-path "external/BrowseComp-Plus/indexes/qwen3-embedding-8b/corpus.shard*.pkl" \
   --retriever-model-name "Qwen/Qwen3-Embedding-8B" \
   --normalize \
-  --policy-init-model "Qwen/Qwen3.5-35B-A3B" \
+  --policy-init-model "Qwen/Qwen3.5-9B" \
   --value-init-model "Qwen/Qwen3.5-9B" \
   --num-iters 1 \
   --rollout-sglang-url "http://127.0.0.1:8000" \
-  --rollout-sglang-model "Qwen/Qwen3.5-35B-A3B" \
+  --rollout-sglang-model "Qwen/Qwen3.5-9B" \
   --rollout-max-steps 24 \
   --rollout-max-new-tokens 768 \
   --agent-prompt-template browsecomp \
@@ -73,10 +73,10 @@ What this does per iteration:
 3. compute rewards (`final_answer` vs `gold_answer`)
 4. train value model (`Qwen/Qwen3.5-9B` backbone)
 5. compute advantages
-6. train policy model (`Qwen/Qwen3.5-35B-A3B` backbone, QLoRA adapters over attention + MLP/expert projections)
+6. train policy model (`Qwen/Qwen3.5-9B` backbone, full fine-tuning)
 7. evaluate on BrowseComp-Plus and log score
 
-Note: the revised VALOR plan uses separate policy and value models. The RL loop keeps that split: policy checkpoints come from `Qwen/Qwen3.5-35B-A3B`, while value checkpoints come from `Qwen/Qwen3.5-9B`.
+Note: the revised VALOR plan uses separate policy and value models. The RL loop keeps that split configurable, and the current defaults use `Qwen/Qwen3.5-9B` for policy and `Qwen/Qwen3.5-9B` for value.
 
 ## 4) Multi-Iteration With Updated Policy Checkpoints
 
@@ -84,24 +84,24 @@ If your SGLang server is serving one fixed model, you should run **one iteration
 
 After iteration 1, the policy checkpoint is:
 
-- `runs/browsecomp_plus/rl_qwen35b_sglang/iter_001/checkpoints/policy`
+- `runs/browsecomp_plus/rl_qwen9b_sglang/iter_001/checkpoints/policy`
 
 Restart SGLang with that checkpoint, then resume training:
 
 ```bash
 uv run python scripts/train_browsecomp_plus_rl.py \
   --browsecomp-root external/BrowseComp-Plus \
-  --output-root runs/browsecomp_plus/rl_qwen35b_sglang \
+  --output-root runs/browsecomp_plus/rl_qwen9b_sglang \
   --searcher-type faiss \
   --index-path "external/BrowseComp-Plus/indexes/qwen3-embedding-8b/corpus.shard*.pkl" \
   --retriever-model-name "Qwen/Qwen3-Embedding-8B" \
   --normalize \
-  --policy-init-model "Qwen/Qwen3.5-35B-A3B" \
+  --policy-init-model "Qwen/Qwen3.5-9B" \
   --value-init-model "Qwen/Qwen3.5-9B" \
   --num-iters 3 \
   --resume \
   --rollout-sglang-url "http://127.0.0.1:8000" \
-  --rollout-sglang-model "runs/browsecomp_plus/rl_qwen35b_sglang/iter_001/checkpoints/policy" \
+  --rollout-sglang-model "runs/browsecomp_plus/rl_qwen9b_sglang/iter_001/checkpoints/policy" \
   --train-qa-source webshaper \
   --webshaper-dataset "Alibaba-NLP/WebShaper" \
   --webshaper-split main
@@ -116,7 +116,7 @@ Under `--output-root`:
 - `logs/train_loop_*.log`: full training loop logs
 - `metrics_history.jsonl`: per-iteration scores and metadata
 - `training_state.json`: resumable state
-- `iter_XXX/checkpoints/policy`: policy checkpoint (Qwen3.5-35B-A3B)
+- `iter_XXX/checkpoints/policy`: policy checkpoint (default: Qwen3.5-9B)
 - `iter_XXX/checkpoints/value`: value checkpoint (Qwen3.5-9B)
 
 EM benchmark status is logged each iteration as:

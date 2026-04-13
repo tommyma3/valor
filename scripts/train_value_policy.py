@@ -63,14 +63,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Per-GPU memory limit (e.g. 20GiB) or JSON dict for policy-model sharding.",
     )
-    parser.add_argument("--policy-bnb-4bit-compute-dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
-    parser.add_argument("--policy-lora-r", type=int, default=64)
-    parser.add_argument("--policy-lora-alpha", type=int, default=128)
-    parser.add_argument("--policy-lora-dropout", type=float, default=0.05)
-    parser.add_argument(
-        "--policy-lora-target-modules",
-        default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,w1,w2,w3",
-    )
+    parser.add_argument("--policy-torch-dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
     parser.add_argument(
         "--policy-attn-implementation",
         choices=["auto", "eager", "sdpa", "flash_attention_2"],
@@ -206,16 +199,8 @@ def train_policy_model(
         str(args.policy_alpha),
         "--indicator-drop-prob",
         str(args.policy_indicator_drop_prob),
-        "--bnb-4bit-compute-dtype",
-        args.policy_bnb_4bit_compute_dtype,
-        "--lora-r",
-        str(args.policy_lora_r),
-        "--lora-alpha",
-        str(args.policy_lora_alpha),
-        "--lora-dropout",
-        str(args.policy_lora_dropout),
-        "--lora-target-modules",
-        args.policy_lora_target_modules,
+        "--torch-dtype",
+        args.policy_torch_dtype,
         "--attn-implementation",
         args.policy_attn_implementation,
         "--checkpoint-every",
@@ -278,11 +263,7 @@ def main() -> None:
             "policy_max_length": args.policy_max_length,
             "policy_alpha": args.policy_alpha,
             "policy_indicator_drop_prob": args.policy_indicator_drop_prob,
-            "policy_bnb_4bit_compute_dtype": args.policy_bnb_4bit_compute_dtype,
-            "policy_lora_r": args.policy_lora_r,
-            "policy_lora_alpha": args.policy_lora_alpha,
-            "policy_lora_dropout": args.policy_lora_dropout,
-            "policy_lora_target_modules": args.policy_lora_target_modules,
+            "policy_torch_dtype": args.policy_torch_dtype,
             "policy_attn_implementation": args.policy_attn_implementation,
             "policy_max_memory": args.policy_max_memory,
             "policy_checkpoint_every": args.policy_checkpoint_every,

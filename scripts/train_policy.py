@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from valor.data import PolicyDataset, collate_policy
 from valor.io_utils import read_jsonl
-from valor.model import DEFAULT_QLORA_TARGET_MODULES, PolicyModel
+from valor.model import PolicyModel
 from valor.rl_utils import load_json, save_json, utc_now_iso
 from valor.utils import set_seed
 
@@ -20,10 +20,10 @@ OPTIMIZER_STATE_FILENAME = "optimizer.pt"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train policy with QLoRA advantage conditioning.")
+    parser = argparse.ArgumentParser(description="Train policy with advantage conditioning.")
     parser.add_argument("--data", required=True, help="Trajectories jsonl with advantage labels.")
     parser.add_argument("--output", required=True, help="Output directory for checkpoint.")
-    parser.add_argument("--backbone", default="Qwen/Qwen3.5-35B-A3B")
+    parser.add_argument("--backbone", default="Qwen/Qwen3.5-9B")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=2e-4)
@@ -49,23 +49,15 @@ def parse_args() -> argparse.Namespace:
         help="Per-GPU memory limit (e.g. 20GiB) or JSON dict for max_memory when sharding the model.",
     )
     parser.add_argument(
-        "--bnb-4bit-compute-dtype",
+        "--torch-dtype",
         choices=["bf16", "fp16", "fp32"],
         default="bf16",
-        help="Compute dtype used inside bitsandbytes 4-bit kernels.",
-    )
-    parser.add_argument("--lora-r", type=int, default=64)
-    parser.add_argument("--lora-alpha", type=int, default=128)
-    parser.add_argument("--lora-dropout", type=float, default=0.05)
-    parser.add_argument(
-        "--lora-target-modules",
-        default=",".join(DEFAULT_QLORA_TARGET_MODULES),
-        help="Comma-separated LoRA target module suffixes. Defaults cover attention and MLP/expert projections.",
+        help="Model parameter/activation dtype used during policy training.",
     )
     parser.add_argument(
         "--disable-gradient-checkpointing",
         action="store_true",
-        help="Disable gradient checkpointing on the quantized backbone.",
+        help="Disable gradient checkpointing on the policy backbone.",
     )
     parser.add_argument(
         "--attn-implementation",
@@ -89,13 +81,6 @@ def parse_args() -> argparse.Namespace:
     args.data = str(Path(args.data).expanduser().resolve())
     args.output = str(Path(args.output).expanduser().resolve())
     return args
-
-
-def _parse_lora_target_modules(raw_value: str) -> list[str]:
-    modules = [part.strip() for part in raw_value.split(",") if part.strip()]
-    if not modules:
-        raise ValueError("--lora-target-modules must contain at least one module name.")
-    return modules
 
 
 def _resolve_compute_dtype(dtype_name: str) -> torch.dtype:
@@ -163,7 +148,7 @@ def _count_trainable_parameters(model: torch.nn.Module) -> tuple[int, int]:
     return trainable, total
 
 
-def _build_config_snapshot(args: argparse.Namespace, lora_target_modules: list[str]) -> dict[str, Any]:
+def _build_config_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "data": args.data,
         "backbone": args.backbone,
@@ -176,11 +161,7 @@ def _build_config_snapshot(args: argparse.Namespace, lora_target_modules: list[s
         "seed": args.seed,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "max_memory": args.max_memory,
-        "bnb_4bit_compute_dtype": args.bnb_4bit_compute_dtype,
-        "lora_r": args.lora_r,
-        "lora_alpha": args.lora_alpha,
-        "lora_dropout": args.lora_dropout,
-        "lora_target_modules": list(lora_target_modules),
+        "torch_dtype": args.torch_dtype,
         "disable_gradient_checkpointing": bool(args.disable_gradient_checkpointing),
         "attn_implementation": args.attn_implementation,
     }
@@ -247,16 +228,12 @@ def main() -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("Policy QLoRA training requires CUDA and bitsandbytes on the remote server.")
-
     records = read_jsonl(args.data)
     dataset = PolicyDataset(records)
 
-    compute_dtype = _resolve_compute_dtype(args.bnb_4bit_compute_dtype)
+    compute_dtype = _resolve_compute_dtype(args.torch_dtype)
     gpu_count = torch.cuda.device_count() if args.device == "cuda" else 0
-    lora_target_modules = _parse_lora_target_modules(args.lora_target_modules)
-    config_snapshot = _build_config_snapshot(args, lora_target_modules)
+    config_snapshot = _build_config_snapshot(args)
 
     resume_state = None
     model_source = args.backbone
@@ -281,9 +258,9 @@ def main() -> None:
     attn_implementation = None if args.attn_implementation == "auto" else args.attn_implementation
 
     print(
-        f"Loading policy backbone with QLoRA from {model_source} "
-        f"(attention: {args.attn_implementation}, device_map: {device_map}, "
-        f"max_memory: {max_memory}, io_device: {io_device})..."
+        f"Loading policy backbone from {model_source} "
+        f"(dtype: {args.torch_dtype}, attention: {args.attn_implementation}, "
+        f"device_map: {device_map}, max_memory: {max_memory}, io_device: {io_device})..."
     )
     model = PolicyModel(
         model_source,
@@ -291,23 +268,20 @@ def main() -> None:
         device_map=device_map,
         trust_remote_code=True,
         max_memory=max_memory,
-        use_qlora=True,
-        qlora_trainable=True,
-        qlora_compute_dtype=compute_dtype,
-        lora_r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        lora_target_modules=lora_target_modules,
         attn_implementation=attn_implementation,
         io_device=io_device,
     )
+
+    model_device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    if device_map is None:
+        model.to(model_device)
 
     if not args.disable_gradient_checkpointing and hasattr(model.backbone, "gradient_checkpointing_enable"):
         model.backbone.gradient_checkpointing_enable()
 
     trainable_params = [param for param in model.parameters() if param.requires_grad]
     if not trainable_params:
-        raise RuntimeError("No trainable parameters found after QLoRA initialization.")
+        raise RuntimeError("No trainable parameters found for policy training.")
 
     trainable_count, total_count = _count_trainable_parameters(model)
     print(
@@ -315,13 +289,11 @@ def main() -> None:
         f"{trainable_count:,} / {total_count:,} "
         f"({100.0 * trainable_count / max(total_count, 1):.4f}%)"
     )
-    print(f"LoRA target modules: {', '.join(lora_target_modules)}")
 
     optimizer = torch.optim.AdamW(
         trainable_params,
         lr=args.lr,
         foreach=False,
-        eps=1e-7,
     )
     if resume_state is not None:
         _load_optimizer_state(optimizer, output_dir)
@@ -485,7 +457,7 @@ def main() -> None:
         optimizer=optimizer,
         state=final_state,
     )
-    print(f"Saved QLoRA policy adapter to {output_dir}")
+    print(f"Saved policy checkpoint to {output_dir}")
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ except ImportError:
     SUMMARY_LLM_URL = os.getenv("SUMMARY_LLM_URL", "http://127.0.0.1:10086/v1/chat/completions")
     SUMMARY_LLM_AUTH = os.getenv("SUMMARY_LLM_AUTH", "")
     MAX_WEBPAGE_TOKENS = int(os.getenv("MAX_WEBPAGE_TOKENS", "48000"))
-    TOKENIZER_PATH = os.getenv("TOKENIZER_PATH", "model/Qwen3.5-35B-A3B")
+    TOKENIZER_PATH = os.getenv("TOKENIZER_PATH", "model/Qwen3.5-9B")
 
 # Optional summary model/api-key wiring (useful for Moonshot/Kimi endpoints).
 SUMMARY_LLM_MODEL = os.getenv("SUMMARY_LLM_MODEL", os.getenv("MOONSHOT_MODEL", ""))

@@ -59,11 +59,11 @@ python scripts/collect_trajectories_rl.py \\
     --answers-jsonl /path/to/BrowseComp/data/browsecomp_plus_decrypted.jsonl \\
     --query-id-file /path/to/train_ids.txt \\
     --output-dir runs/iter_001_data \\
-    --model-path Qwen/Qwen3.5-35B-A3B \\
+    --model-path Qwen/Qwen3.5-9B \\
     --searcher-type bm25 \\
     --index-path /path/to/index \\
     --sglang-url http://localhost:30000 \\
-    --sglang-model Qwen/Qwen3.5-35B-A3B
+    --sglang-model Qwen/Qwen3.5-9B
 
 # Using WebShaper data
 python scripts/collect_trajectories_rl.py \\
@@ -72,7 +72,7 @@ python scripts/collect_trajectories_rl.py \\
     --answers-jsonl /path/to/output/answers.jsonl \\
     --query-id-file /path/to/train_ids.txt \\
     --output-dir runs/iter_001_data \\
-    --model-path Qwen/Qwen3.5-35B-A3B \\
+    --model-path Qwen/Qwen3.5-9B \\
     --searcher-type bm25 \\
     --index-path /path/to/index \\
     --sglang-url http://localhost:30000
@@ -84,7 +84,7 @@ python scripts/collect_trajectories_rl.py \\
 python scripts/train_value_policy.py \\
     --trajectories runs/iter_001_data/trajectories_rewarded.jsonl \\
     --value-model Qwen/Qwen3.5-9B \\
-    --policy-model Qwen/Qwen3.5-35B-A3B \\
+    --policy-model Qwen/Qwen3.5-9B \\
     --output-dir runs/iter_001_checkpoints \\
     --value-batch-size 2 \\
     --policy-batch-size 1 \\
@@ -101,7 +101,7 @@ python scripts/evaluate_baseline.py \\
     --queries-tsv /path/to/BrowseComp/topics-qrels/queries.tsv \\
     --answers-jsonl /path/to/BrowseComp/data/browsecomp_plus_decrypted.jsonl \\
     --query-id-file /path/to/eval_ids.txt \\
-    --model-path Qwen/Qwen3.5-35B-A3B \\
+    --model-path Qwen/Qwen3.5-9B \\
     --searcher-type bm25 \\
     --index-path /path/to/index \\
     --sglang-url http://localhost:30000 \\
