@@ -150,7 +150,33 @@ def main() -> None:
     if args.device_map is None:
         encoded = encoded.to(device)
 
+    # Run a forward pass to get raw logits from the model
     with torch.no_grad():
+        try:
+            policy_outputs = model(input_ids=encoded["input_ids"], attention_mask=encoded.get("attention_mask"))
+            lm_logits = policy_outputs.lm_logits
+            print("\n=== Raw LM Logits ===")
+            print(lm_logits)
+            print("\n=== LM Logits Shape ===")
+            print(tuple(lm_logits.shape))
+            try:
+                next_token_logits = lm_logits[0, -1, :]
+                topk = torch.topk(next_token_logits, k=min(20, next_token_logits.size(-1)))
+                print("\n=== Top Tokens by Logit (id, logit, token) ===")
+                for tid, val in zip(topk.indices.tolist(), topk.values.tolist()):
+                    print(tid, val, tokenizer.convert_ids_to_tokens(tid))
+                greedy_ids = lm_logits.argmax(dim=-1)[0].tolist()
+                print("\n=== Greedy token ids for input sequence ===")
+                print(greedy_ids)
+                print("\n=== Greedy tokens ===")
+                print(" ".join(tokenizer.convert_ids_to_tokens(greedy_ids)))
+            except Exception:
+                pass
+        except Exception:
+            # Some model wrappers may not support direct forward; ignore safely
+            lm_logits = None
+
+        # Perform generation as before
         generated = model.backbone.generate(
             **encoded,
             max_new_tokens=args.max_new_tokens,
