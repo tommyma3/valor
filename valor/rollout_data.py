@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -277,5 +278,81 @@ def assign_terminal_binary_rewards(
         pred = normalize_text(str(final_record.get(final_answer_field, "")))
         gold = normalize_text(str(final_record.get(gold_answer_field, "")))
         final_record["reward"] = 1 if pred and pred == gold else 0
+
+    return records
+
+
+def load_browsecomp_eval_summary_correctness(summary_path: Path) -> dict[str, bool]:
+    with summary_path.open("r", encoding="utf-8") as f:
+        summary = json.load(f)
+
+    per_query_metrics = summary.get("per_query_metrics")
+    if not isinstance(per_query_metrics, list):
+        raise ValueError(
+            f"BrowseComp eval summary is missing a valid 'per_query_metrics' list: {summary_path}"
+        )
+
+    correctness_by_query_id: dict[str, bool] = {}
+    for idx, item in enumerate(per_query_metrics):
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"Invalid per_query_metrics entry at index {idx} in {summary_path}: expected object."
+            )
+
+        query_id = str(item.get("query_id", "")).strip()
+        if not query_id:
+            raise ValueError(
+                f"Invalid per_query_metrics entry at index {idx} in {summary_path}: missing query_id."
+            )
+        if query_id in correctness_by_query_id:
+            raise ValueError(
+                f"Duplicate query_id '{query_id}' found in BrowseComp eval summary: {summary_path}"
+            )
+
+        correct = item.get("correct")
+        if not isinstance(correct, bool):
+            raise ValueError(
+                f"Invalid 'correct' value for query_id '{query_id}' in {summary_path}: expected boolean."
+            )
+        correctness_by_query_id[query_id] = correct
+
+    if not correctness_by_query_id:
+        raise ValueError(f"No per-query correctness values found in BrowseComp eval summary: {summary_path}")
+
+    return correctness_by_query_id
+
+
+def assign_terminal_binary_rewards_from_correctness(
+    records: list[dict[str, Any]],
+    correctness_by_query_id: Mapping[str, bool],
+    *,
+    trajectory_field: str = "trajectory_id",
+    timestep_field: str = "t",
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for idx, record in enumerate(records):
+        key = str(record.get(trajectory_field, idx))
+        grouped.setdefault(key, []).append(record)
+
+    missing_query_ids = sorted(
+        query_id for query_id in grouped.keys() if query_id not in correctness_by_query_id
+    )
+    if missing_query_ids:
+        preview = ", ".join(missing_query_ids[:10])
+        suffix = " ..." if len(missing_query_ids) > 10 else ""
+        raise ValueError(
+            "BrowseComp eval summary is missing per-query correctness for trajectory ids: "
+            f"{preview}{suffix}"
+        )
+
+    for traj in grouped.values():
+        if traj and timestep_field in traj[0]:
+            traj.sort(key=lambda row: row[timestep_field])
+        for record in traj:
+            record["reward"] = 0
+
+        final_record = traj[-1]
+        query_id = str(final_record.get(trajectory_field, ""))
+        final_record["reward"] = 1 if correctness_by_query_id[query_id] else 0
 
     return records
