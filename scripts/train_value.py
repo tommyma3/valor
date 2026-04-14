@@ -73,14 +73,15 @@ def main() -> None:
     for epoch in range(args.epochs):
         progress = tqdm(loader, desc=f"epoch {epoch+1}")
         for batch in progress:
-            if device is not None:
+            if args.device_map is None and device is not None:
                 batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(
                 input_ids=batch["input_ids"],
                 attention_mask=batch["attention_mask"],
             )
             loss = torch.nn.functional.cross_entropy(
-                outputs.value_logits, batch["value_labels"]
+                outputs.value_logits,
+                batch["value_labels"].to(outputs.value_logits.device),
             )
             optimizer.zero_grad()
             loss.backward()

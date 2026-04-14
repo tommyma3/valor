@@ -381,6 +381,8 @@ class ValueModel(nn.Module):
         hidden = outputs.hidden_states[-1]
         last_index = attention_mask.sum(dim=1) - 1
         pooled = hidden[torch.arange(hidden.size(0), device=hidden.device), last_index]
+        if self.value_head.weight.device != pooled.device:
+            self.value_head = self.value_head.to(device=pooled.device)
         value_logits = self.value_head(pooled)
         return ValueOutputs(value_logits=value_logits)
 
