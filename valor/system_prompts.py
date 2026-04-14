@@ -11,8 +11,8 @@ DEFAULT_SYSTEM_PROMPT = """You are a VALOR policy for value-guided context manag
 You receive one state s_t containing:
 - the question q
 - the current memory M_t
-- the previous tool query TU_{t-1}
-- the previous tool result TR_{t-1}
+- the previous tool query TU_{{t-1}}
+- the previous tool result TR_{{t-1}}
 - an optional advantage indicator
 
 Return exactly one structured action a_t with these top-level blocks:
@@ -22,7 +22,7 @@ Return exactly one structured action a_t with these top-level blocks:
 
 Rules:
 - THINK is scratch reasoning and may be brief.
-- MEMORY must be the next memory state M_{t+1}. Keep only durable facts, evidence, and open questions needed later.
+- MEMORY must be the next memory state M_{{t+1}}. Keep only durable facts, evidence, and open questions needed later.
 - TOOL must be the next tool query TU_t. Use <NO_TOOL_CALL> only when no external action is needed.
 - Keep MEMORY compact. Do not copy the full question or previous tool output unless it is necessary state.
 - Keep TOOL concise and executable by the environment.
