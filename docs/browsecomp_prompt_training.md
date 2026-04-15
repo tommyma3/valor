@@ -9,6 +9,10 @@ The new training scripts are:
 
 These scripts are intended for checkpoints that will be used with BrowseComp-style inference, including `scripts/collect_valor_browsecomp.py`.
 
+The matching advantage script is:
+
+- `scripts/compute_browsecomp_advantages.py`
+
 ## What Changed
 
 The original trainers use the generic VALOR prompt and action schema:
@@ -99,6 +103,20 @@ Useful flags:
 
 ## Train the Policy Model
 
+Before policy training, generate BrowseComp-compatible advantages with the BrowseComp value model:
+
+```bash
+uv run python scripts/compute_browsecomp_advantages.py \
+  --data runs/iter_002_data/trajectories_rewarded.jsonl \
+  --value-model checkpoints/browsecomp_value \
+  --output runs/iter_002_data/trajectories_adv.jsonl \
+  --batch-size 2 \
+  --search-top-k 5 \
+  --include-get-document
+```
+
+Then train the policy:
+
 Example:
 
 ```bash
@@ -168,13 +186,15 @@ PYTHONPATH=. uv run scripts/collect_valor_browsecomp.py \
 
 - `scripts/train_policy.py` and `scripts/train_value.py` remain the correct trainers for the original VALOR `<THINK>/<MEMORY>/<TOOL>` setup.
 - `scripts/train_browsecomp_policy.py` and `scripts/train_browsecomp_value.py` are for the BrowseComp `<report>/<tool_call>/<answer>` setup.
+- `scripts/compute_advantages.py` is for the original VALOR value prompt path.
+- `scripts/compute_browsecomp_advantages.py` is for BrowseComp-trained value checkpoints.
 - Do not expect checkpoints trained with one schema to behave well under the other schema.
 
 ## Recommended Workflow
 
 1. Collect or prepare trajectory JSONL data in the existing format.
 2. Run `scripts/compute_rewards.py` if rewards are missing.
-3. Run `scripts/compute_advantages.py` if `advantage_label` is missing for policy training.
+3. Run `scripts/compute_browsecomp_advantages.py` if `advantage_label` is missing for BrowseComp policy training.
 4. Train the BrowseComp value model with `scripts/train_browsecomp_value.py`.
 5. Train the BrowseComp policy model with `scripts/train_browsecomp_policy.py`.
 6. Run BrowseComp inference with `scripts/collect_valor_browsecomp.py`.
