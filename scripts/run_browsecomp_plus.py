@@ -66,21 +66,6 @@ def _utc_now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-def _resolve_advantage_label(raw_value: str) -> str | None:
-    normalized = raw_value.strip().lower()
-    if normalized in {"positive", "negative"}:
-        return normalized
-    if normalized == "none":
-        return None
-    raise ValueError(f"Unsupported advantage label: {raw_value}")
-
-
-def _append_advantage_block(prompt: str, advantage_label: str | None) -> str:
-    if advantage_label is None:
-        return prompt
-    return prompt.rstrip() + f"\n\n### Advantage\nAdvantage: {advantage_label}\n"
-
-
 def _extract_tag(text: str, tag: str) -> str:
     pattern = rf"<{tag}>(.*?)</{tag}>"
     match = re.search(pattern, text, flags=re.DOTALL | re.IGNORECASE)
@@ -746,12 +731,6 @@ def _build_arg_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace
     parser.add_argument("--date", default=None, help="Date injected into prompt (YYYY-MM-DD).")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        "--advantage-label",
-        choices=["positive", "negative", "none"],
-        default="none",
-        help="Condition each BrowseComp state on an advantage indicator.",
-    )
-    parser.add_argument(
         "--agent-prompt-template",
         choices=AGENT_PROMPT_TEMPLATE_CHOICES,
         default="browsecomp",
@@ -834,7 +813,6 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
     logger = _configure_logging(output_dir)
 
     set_seed(args.seed)
-    advantage_label = _resolve_advantage_label(args.advantage_label)
 
     if args.hf_token:
         import os
@@ -1023,7 +1001,6 @@ def run_experiment(args: argparse.Namespace, format_query: Callable[[str, str | 
                     action=last_action,
                     observation=last_observation,
                 )
-            base_prompt = _append_advantage_block(base_prompt, advantage_label)
 
             completion = ""
             report_text = ""

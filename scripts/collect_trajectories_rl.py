@@ -112,8 +112,6 @@ def build_rollout_command(
         args.query_template,
         "--agent-prompt-template",
         args.agent_prompt_template,
-        "--advantage-label",
-        args.advantage_label,
         "--checkpoint-every",
         str(args.checkpoint_every),
 "--device",
@@ -268,12 +266,6 @@ def parse_args() -> argparse.Namespace:
         default="QUERY_TEMPLATE_NO_GET_DOCUMENT",
     )
     parser.add_argument("--agent-prompt-template", choices=["browsecomp", "default"], default="browsecomp")
-    parser.add_argument(
-        "--advantage-label",
-        choices=["positive", "negative", "none"],
-        default="none",
-        help="Condition each BrowseComp state on an advantage indicator.",
-    )
 
     parser.add_argument("--max-steps", type=int, default=24, help="Max steps per trajectory")
     parser.add_argument("--format-retries", type=int, default=1, help="Retries for invalid step format")
