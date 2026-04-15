@@ -17,10 +17,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from valor.generation import generate_local_completion
+from prompts import browsecomp_initial_instruction_prompt, browsecomp_instruction_prompt
+from valor.generation import STRICT_FORMAT_SYSTEM_PROMPT, generate_local_completion
 from valor.io_utils import write_jsonl
 from valor.model import PolicyModel
-from valor.prompts import State, format_state_prompt, parse_action
 from valor.rollout_data import load_browsecomp_qa_pairs
 from valor.utils import set_seed
 
@@ -63,6 +63,11 @@ def _normalize_valor_tool_call(tool_query: str) -> tuple[str, dict[str, Any], st
     return tool_name, tool_params, serialized
 
 
+def _append_advantage_label(prompt: str, advantage_label: int) -> str:
+    indicator = "positive" if advantage_label > 0 else "negative"
+    return prompt.rstrip() + f"\n\n### Advantage\nAdvantage: {indicator}\n"
+
+
 def _generate_completion(
     *,
     args: argparse.Namespace,
@@ -92,6 +97,7 @@ def _generate_completion(
         temperature=args.temperature,
         top_p=args.top_p,
         device=device,
+        system_prompt=STRICT_FORMAT_SYSTEM_PROMPT,
     ).completion
 
 
@@ -289,12 +295,15 @@ def run_collection(args: argparse.Namespace, format_query: Callable[[str, str | 
         )
         tools_prompt = runtime.build_tools_prompt()
         formatted_query = format_query(raw_query, args.query_template)
-        agent_question = raw_query if args.query_template.startswith("QUERY_TEMPLATE") else formatted_query
+        agent_question = raw_query
         query_date = args.date or datetime.now().date().isoformat()
 
         memory = ""
         prev_tool_query = ""
         prev_tool_result = ""
+        last_report = ""
+        last_action = ""
+        last_observation = ""
         status = "incomplete"
         final_answer = ""
         transitions_for_query: list[dict[str, Any]] = []
@@ -302,19 +311,41 @@ def run_collection(args: argparse.Namespace, format_query: Callable[[str, str | 
         trace_steps: list[dict[str, Any]] = []
 
         for step_idx in range(1, args.max_steps + 1):
-            state = State(
-                question=agent_question,
-                memory=memory,
-                prev_tool_query=prev_tool_query,
-                prev_tool_result=prev_tool_result,
-            )
-            prompt = format_state_prompt(
-                state,
-                include_advantage=True,
-                advantage_label=1,
-                tools=tools_prompt,
-                date_to_use=query_date,
-            )
+            if step_idx == 1:
+                base_prompt = browsecomp_initial_instruction_prompt.format(
+                    date_to_use=query_date,
+                    question=agent_question,
+                    tools=tools_prompt,
+                )
+            else:
+                base_prompt = browsecomp_instruction_prompt.format(
+                    date_to_use=query_date,
+                    question=agent_question,
+                    tools=tools_prompt,
+                    report=last_report,
+                    action=last_action,
+                    observation=last_observation,
+                )
+            prompt = _append_advantage_label(base_prompt, advantage_label=1)
+
+            trace_item: dict[str, Any] = {
+                "step": step_idx,
+                "state": {
+                    "question": agent_question,
+                    "memory": memory,
+                    "prev_tool_query": prev_tool_query,
+                    "prev_tool_result": prev_tool_result,
+                },
+                "prompt": prompt,
+            }
+            transition = {
+                "trajectory_id": query_id,
+                "t": step_idx - 1,
+                "question": agent_question,
+                "memory": memory,
+                "prev_tool_query": prev_tool_query,
+                "prev_tool_result": prev_tool_result,
+            }
 
             completion = _generate_completion(
                 args=args,
@@ -323,55 +354,35 @@ def run_collection(args: argparse.Namespace, format_query: Callable[[str, str | 
                 tokenizer=tokenizer,
                 device=device,
             )
+            trace_item["completion"] = completion
 
-            trace_item: dict[str, Any] = {
-                "step": step_idx,
-                "state": {
-                    "question": state.question,
-                    "memory": state.memory,
-                    "prev_tool_query": state.prev_tool_query,
-                    "prev_tool_result": state.prev_tool_result,
-                },
-                "completion": completion,
-            }
+            report_text, answer_text, tool_call_text = HELPERS._extract_sections(completion)
+            format_error = HELPERS._step_format_error(step_idx, answer_text, tool_call_text)
+            trace_item["report"] = report_text
+            trace_item["answer"] = answer_text
+            trace_item["tool_call"] = tool_call_text
 
-            try:
-                action = parse_action(completion)
-            except ValueError:
-                trace_item["parse_error"] = "Could not parse VALOR action."
+            if format_error:
+                trace_item["format_error"] = format_error
                 trace_steps.append(trace_item)
                 break
 
-            raw_tool_query = action.tool_query.strip()
-            next_memory = action.memory_update.strip()
-            transition = {
-                "trajectory_id": query_id,
-                "t": step_idx - 1,
-                "question": state.question,
-                "memory": state.memory,
-                "prev_tool_query": state.prev_tool_query,
-                "prev_tool_result": state.prev_tool_result,
-                "action_think": action.think,
-                "action_memory_update": action.memory_update,
-                "action_tool_query": action.tool_query,
-            }
+            action_think = report_text if report_text else "No report."
+            action_memory_update = report_text if report_text else (memory if memory else "<empty>")
+            transition["action_think"] = action_think
+            transition["action_memory_update"] = action_memory_update
             result_items.append(
                 {
                     "type": "reasoning",
                     "tool_name": None,
                     "arguments": None,
-                    "output": action.think,
+                    "output": action_think,
                 }
             )
 
-            trace_item["action"] = {
-                "think": action.think,
-                "memory_update": action.memory_update,
-                "tool_query": action.tool_query,
-            }
-
-            if raw_tool_query in {"", "<NO_TOOL_CALL>"}:
-                final_answer = next_memory or action.think.strip()
+            if answer_text:
+                final_answer = answer_text.strip()
+                transition["action_tool_query"] = "<NO_TOOL_CALL>"
                 transition["final_answer"] = final_answer
                 transition["gold_answer"] = qa.answer
                 transitions_for_query.append(transition)
@@ -388,14 +399,26 @@ def run_collection(args: argparse.Namespace, format_query: Callable[[str, str | 
                 status = "completed"
                 break
 
+            if not tool_call_text:
+                trace_item["tool_error"] = "[Tool Error] Missing <tool_call> tag."
+                trace_steps.append(trace_item)
+                break
+
             try:
-                tool_name, tool_params, serialized_query = _normalize_valor_tool_call(raw_tool_query)
+                tool_name, tool_params, serialized_query = _normalize_valor_tool_call(tool_call_text)
                 canonical_tool, tool_output = runtime.execute(tool_name, tool_params)
-                prev_tool_query = json.dumps(
+                action_tool_query = json.dumps(
                     {"tool": canonical_tool, "parameters": tool_params},
                     ensure_ascii=False,
                 )
+                transition["action_tool_query"] = action_tool_query
+                prev_tool_query = action_tool_query
                 prev_tool_result = tool_output
+                last_action = action_tool_query
+                last_observation = tool_output
+                if report_text:
+                    memory = report_text
+                    last_report = report_text
                 result_items.append(
                     {
                         "type": "tool_call",
@@ -409,13 +432,19 @@ def run_collection(args: argparse.Namespace, format_query: Callable[[str, str | 
                 trace_item["tool_query"] = serialized_query
                 trace_item["tool_output"] = tool_output
             except Exception as exc:
-                prev_tool_query = raw_tool_query
+                transition["action_tool_query"] = tool_call_text
+                prev_tool_query = tool_call_text
                 prev_tool_result = f"[Tool Error] {exc}"
+                last_action = tool_call_text
+                last_observation = prev_tool_result
+                if report_text:
+                    memory = report_text
+                    last_report = report_text
                 result_items.append(
                     {
                         "type": "tool_call",
                         "tool_name": "tool_error",
-                        "arguments": raw_tool_query,
+                        "arguments": tool_call_text,
                         "output": prev_tool_result,
                     }
                 )
@@ -423,14 +452,13 @@ def run_collection(args: argparse.Namespace, format_query: Callable[[str, str | 
 
             transitions_for_query.append(transition)
             trace_steps.append(trace_item)
-            memory = next_memory
 
         run_record = {
             "metadata": {
                 "generator": "collect_valor_browsecomp",
                 "generated_at": HELPERS._utc_now_iso(),
                 "model": args.vllm_model.strip() or args.model_path,
-                "prompt_style": "valor_state_positive_advantage",
+                "prompt_style": "browsecomp_positive_advantage",
             },
             "query_id": query_id,
             "status": status,
