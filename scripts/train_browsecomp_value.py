@@ -23,6 +23,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--max-length", type=int, default=2048)
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        default=1,
+        help="Number of steps to accumulate gradients before optimizer step.",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--device-map", default=None)
     parser.add_argument("--freeze-backbone", action="store_true")
@@ -86,7 +92,10 @@ def main() -> None:
     model.train()
     for epoch in range(args.epochs):
         progress = tqdm(loader, desc=f"epoch {epoch + 1}")
-        for batch in progress:
+        optimizer.zero_grad()
+        accumulated_loss = 0.0
+        accumulated_batches = 0
+        for batch_idx, batch in enumerate(progress):
             if args.device_map is None and device is not None:
                 batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(
@@ -97,10 +106,24 @@ def main() -> None:
                 outputs.value_logits,
                 batch["value_labels"].to(outputs.value_logits.device),
             )
-            optimizer.zero_grad()
-            loss.backward()
+            scaled_loss = loss / args.gradient_accumulation_steps
+            scaled_loss.backward()
+            accumulated_loss += loss.item()
+            accumulated_batches += 1
+
+            if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+                avg_loss = accumulated_loss / accumulated_batches if accumulated_batches > 0 else 0.0
+                progress.set_postfix(loss=avg_loss)
+                accumulated_loss = 0.0
+                accumulated_batches = 0
+
+        if accumulated_batches > 0:
             optimizer.step()
-            progress.set_postfix(loss=loss.item())
+            optimizer.zero_grad()
+            avg_loss = accumulated_loss / accumulated_batches if accumulated_batches > 0 else 0.0
+            progress.set_postfix(loss=avg_loss)
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -82,6 +82,7 @@ uv run python scripts/train_browsecomp_value.py \
   --output checkpoints/browsecomp_value \
   --backbone Qwen/Qwen3.5-9B \
   --batch-size 2 \
+  --gradient-accumulation-steps 4 \
   --epochs 1 \
   --lr 2e-5 \
   --max-length 2048 \
@@ -94,6 +95,7 @@ Useful flags:
 - `--date 2026-04-15`: fix the prompt date during training
 - `--freeze-backbone`: train only the value head
 - `--device-map auto`: shard the backbone across GPUs
+- `--gradient-accumulation-steps 4`: simulate a larger effective batch size
 
 ## Train the Policy Model
 
