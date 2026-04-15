@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from prompts import browsecomp_initial_instruction_prompt, browsecomp_instruction_prompt
+from valor.browsecomp_prompting import BrowseCompPromptState, build_browsecomp_prompt
 from valor.generation import STRICT_FORMAT_SYSTEM_PROMPT, generate_local_completion
 from valor.io_utils import write_jsonl
 from valor.model import PolicyModel
@@ -61,11 +61,6 @@ def _normalize_valor_tool_call(tool_query: str) -> tuple[str, dict[str, Any], st
         ensure_ascii=False,
     )
     return tool_name, tool_params, serialized
-
-
-def _append_advantage_label(prompt: str, advantage_label: int) -> str:
-    indicator = "positive" if advantage_label > 0 else "negative"
-    return prompt.rstrip() + f"\n\n### Advantage\nAdvantage: {indicator}\n"
 
 
 def _generate_completion(
@@ -113,7 +108,7 @@ def _build_parser(argv: list[str] | None = None) -> tuple[argparse.Namespace, Ca
     searcher_class = HELPERS._load_searcher_class(searcher_type, browsecomp_root)
 
     parser = argparse.ArgumentParser(
-        description="Collect BrowseComp-Plus trajectories with the VALOR state prompt and positive advantage indicator."
+        description="Collect BrowseComp-Plus trajectories with BrowseComp-native prompts and a positive advantage indicator."
     )
     parser.add_argument("--browsecomp-root", required=True)
     parser.add_argument("--queries", default=None)
@@ -311,22 +306,17 @@ def run_collection(args: argparse.Namespace, format_query: Callable[[str, str | 
         trace_steps: list[dict[str, Any]] = []
 
         for step_idx in range(1, args.max_steps + 1):
-            if step_idx == 1:
-                base_prompt = browsecomp_initial_instruction_prompt.format(
-                    date_to_use=query_date,
+            prompt = build_browsecomp_prompt(
+                BrowseCompPromptState(
                     question=agent_question,
-                    tools=tools_prompt,
-                )
-            else:
-                base_prompt = browsecomp_instruction_prompt.format(
-                    date_to_use=query_date,
-                    question=agent_question,
-                    tools=tools_prompt,
-                    report=last_report,
-                    action=last_action,
-                    observation=last_observation,
-                )
-            prompt = _append_advantage_label(base_prompt, advantage_label=1)
+                    last_report=last_report,
+                    last_tool_call=last_action,
+                    last_tool_response=last_observation,
+                ),
+                tools_prompt=tools_prompt,
+                date_to_use=query_date,
+                advantage_label=1,
+            )
 
             trace_item: dict[str, Any] = {
                 "step": step_idx,
