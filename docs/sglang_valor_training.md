@@ -108,6 +108,16 @@ uv run python scripts/train_browsecomp_plus_rl.py \
 
 Repeat this pattern between iterations (restart server with newest `iter_XXX/checkpoints/policy`).
 
+For Qwen policy checkpoints produced by `scripts/train_policy.py`, restart vLLM with:
+
+```bash
+vllm serve runs/browsecomp_plus/rl_qwen9b_sglang/iter_001/checkpoints/policy \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --trust-remote-code \
+  --language-model-only
+```
+
 ## 5) Logs, Scores, and Checkpoints
 
 Under `--output-root`:
@@ -134,3 +144,4 @@ Optionally enable official BrowseComp evaluation each iteration:
 - If rollouts fail with unknown model on vLLM, check `--rollout-vllm-model` exactly matches what vLLM serves.
 - If FAISS retriever fails, verify `tevatron`, `qwen-omni-utils`, and index paths.
 - If model loading fails, use absolute paths for local checkpoints.
+- If a trained Qwen policy checkpoint fails to load on vLLM, ensure the server was started with `--language-model-only --trust-remote-code`.

@@ -161,6 +161,14 @@ uv run python scripts/train_policy.py \
   --alpha 0
 ```
 
+For Qwen policy checkpoints trained this way, serve the saved checkpoint with vLLM in language-model-only mode:
+
+```bash
+vllm serve checkpoints/policy_sft \
+  --trust-remote-code \
+  --language-model-only
+```
+
 ### 2) Collect trajectories
 
 ```bash
@@ -218,6 +226,14 @@ uv run python scripts/train_policy.py \
   --device-map auto
 ```
 
+When serving a trained Qwen policy checkpoint from `checkpoints/policy_adv`, use:
+
+```bash
+vllm serve checkpoints/policy_adv \
+  --trust-remote-code \
+  --language-model-only
+```
+
 ## Quick LLM test
 
 Once a checkpoint exists, run a single generation to confirm the model responds.
@@ -235,6 +251,7 @@ uv run python scripts/test_llm.py \
 - Advantage conditioning is implemented by adding a textual indicator (`Advantage: positive/negative`) to the prompt.
 - Inference defaults to the behavior policy unless you pass `--advantage-label positive` to scripts that use the structured VALOR prompt.
 - Policy training now updates the policy backbone directly instead of training LoRA adapters.
+- Policy training preserves multimodal Qwen policy configs so the saved checkpoint can still be served with vLLM using `--language-model-only`.
 - Use `--torch-dtype` in `scripts/train_policy.py` to control policy-training dtype.
 - When `--indicator-drop-prob` is non-zero, some samples are trained without the indicator to reduce forgetting.
 - Policy supervision masks the full `<THINK>...</THINK>` block so only memory-update and tool-query tokens are trained.

@@ -10,6 +10,11 @@ from peft import LoraConfig, PeftModel, TaskType, get_peft_model, prepare_model_
 from torch import nn
 from transformers import AutoConfig, AutoModelForCausalLM, BitsAndBytesConfig
 
+try:
+    from transformers import AutoModelForMultimodalLM
+except ImportError:  # pragma: no cover - older Transformers builds
+    AutoModelForMultimodalLM = None
+
 
 ADAPTER_CONFIG_FILENAME = "adapter_config.json"
 DEFAULT_QLORA_TARGET_MODULES = (
@@ -100,6 +105,7 @@ def _resolve_policy_backbone_name(backbone_name: str) -> str:
         )
     return base_model_name
 
+
 def _resolve_num_hidden_layers(config) -> int:
     candidates = [
         "num_hidden_layers",
@@ -122,6 +128,34 @@ def _resolve_num_hidden_layers(config) -> int:
                 pass
 
     raise ValueError("Could not infer number of hidden layers from model config.")
+
+
+def _is_multimodal_config(config) -> bool:
+    if hasattr(config, "vision_config") or hasattr(config, "image_config"):
+        return True
+    for nested_attr in ["vision_tower_config", "visual_config", "multi_modal_config"]:
+        if hasattr(config, nested_attr):
+            return True
+    model_type = getattr(config, "model_type", "")
+    architectures = getattr(config, "architectures", None)
+    if isinstance(architectures, (list, tuple)):
+        return any(
+            "ConditionalGeneration" in architecture and ("qwen" in architecture.lower() or "qwen" in str(model_type).lower())
+            for architecture in architectures
+            if isinstance(architecture, str)
+        )
+    return False
+
+
+def _policy_model_loader_cls(config):
+    if _is_multimodal_config(config):
+        if AutoModelForMultimodalLM is None:
+            raise ImportError(
+                "This policy backbone uses a multimodal config, but the installed Transformers build "
+                "does not provide AutoModelForMultimodalLM."
+            )
+        return AutoModelForMultimodalLM
+    return AutoModelForCausalLM
 
 
 def build_sequence_headroom_device_map(
@@ -221,6 +255,7 @@ def _load_policy_backbone(
     config = AutoConfig.from_pretrained(base_backbone_name, trust_remote_code=trust_remote_code)
     if attn_implementation is not None:
         config._attn_implementation = attn_implementation
+    model_loader_cls = _policy_model_loader_cls(config)
 
     should_quantize = use_qlora or adapter_metadata is not None
     quantization_config = None
@@ -229,7 +264,7 @@ def _load_policy_backbone(
         if device_map is None and torch.cuda.is_available():
             device_map = {"": torch.cuda.current_device()}
 
-    backbone = AutoModelForCausalLM.from_pretrained(
+    backbone = model_loader_cls.from_pretrained(
         base_backbone_name,
         config=config,
         torch_dtype=torch_dtype,
